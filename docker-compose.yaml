@@ -1,0 +1,15 @@
+services:
+  robodog-server:
+    build: .
+    container_name: robodog_mcp_container
+    network_mode: host  # WAJIB agar bisa komunikasi Multiple Machine dengan Robot
+    volumes:
+      - .:/app          # Hot-reload untuk development
+      - /tmp/.X11-unix:/tmp/.X11-unix # Untuk GUI support (RViz/Gazebo)
+    environment:
+      # --- KONFIGURASI ROS MULTIPLE MACHINE ---
+      - ROS_MASTER_URI=http://192.168.1.101:11311  # Ganti dengan IP Robot Anda
+      - ROS_IP=192.168.1.100                      # Ganti dengan IP Laptop (Host) Anda
+      - DISPLAY=${DISPLAY}                        # Teruskan display untuk GUI
+      - TURTLEBOT3_MODEL=burger                   # Sesuaikan model robot
+    restart: unless-stopped

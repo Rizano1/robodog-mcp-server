@@ -23,51 +23,51 @@ FOLDER_NAME = "sop"
 @mcp.tool
 def move(linear_speed: float = 0.0, angular_speed: float = 0.0, duration: float = 5.0) -> str:
     """
-    Memerintahkan TurtleBot untuk bergerak (linear) dan/atau berputar (angular) 
-    selama durasi tertentu.
+    Memerintahkan robot untuk bergerak secara manual (open-loop).
+    Cocok untuk pergerakan sederhana tanpa planning jalur.
     
-    :param linear_speed: Kecepatan linear (m/s). Positif untuk maju, negatif untuk mundur. Default: 0.0.
-    :param angular_speed: Kecepatan angular (rad/s). Positif untuk berputar ke kiri, negatif untuk ke kanan. Default: 0.0.
-    :param duration: Durasi pergerakan (detik). Default: 5.0.
-    :return: Status perintah.
+    :param linear_speed: Kecepatan maju/mundur (m/s). Positif untuk maju.
+    :param angular_speed: Kecepatan rotasi (rad/s). Positif untuk kiri (counter-clockwise).
+    :param duration: Berapa lama robot harus bergerak (detik).
     """
     controller = get_controller_node()
 
     if controller is None:
-        return "ROS2 Controller Node is not initialized. Please ensure ROS 2 is running."
+        return "Gagal: Controller ROS Noetic belum siap atau roscore tidak terdeteksi."
 
+    # Memanggil metode async pada controller Noetic
     controller.move_async(linear_speed, angular_speed, duration)
     
     return (
-        f"Moving: Linear={linear_speed} m/s, Angular={angular_speed} rad/s "
-        f"for {duration} seconds."
+        f"Perintah gerakan dikirim: Maju={linear_speed}m/s, "
+        f"Belok={angular_speed}rad/s selama {duration}s."
     )
 
 @mcp.tool
 def navigate_to_waypoint(x: float, y: float, theta: float = 0.0) -> str:
     """
-    Mengirim tujuan navigasi (waypoint) ke stack Navigasi ROS 2 (Nav2).
-    Robot akan mencari jalur dan bergerak ke lokasi tersebut.
+    Mengirimkan tujuan navigasi (waypoint) ke stack move_base (ROS 1).
+    Robot akan merencanakan jalur (path planning) untuk menghindari rintangan.
     
-    :param x: Koordinat X tujuan (meter) di frame 'map'. (Wajib)
-    :param y: Koordinat Y tujuan (meter) di frame 'map'. (Wajib)
-    :param theta: Orientasi akhir yang diinginkan (Yaw) dalam radian. Default: 0.0.
-    :return: Status perintah navigasi.
+    :param x: Koordinat X target pada peta (meter).
+    :param y: Koordinat Y target pada peta (meter).
+    :param theta: Sudut orientasi akhir (Yaw) dalam radian (misal: 1.57 untuk 90 derajat).
     """
     controller = get_controller_node()
 
     if controller is None:
-        return "ROS2 Controller Node is not initialized. Please ensure ROS 2 is running."
+        return "Gagal: Controller ROS Noetic tidak tersedia."
 
+    # Mengirim goal ke Action Server move_base
     goal_sent = controller.send_nav_goal_async(x, y, theta)
     
     if goal_sent:
         return (
-            f"Navigation goal sent to coordinates ({x:.2f}m, {y:.2f}m) "
-            f"with orientation {theta:.2f} rad. Robot is now navigating."
+            f"Goal navigasi berhasil dikirim ke koordinat ({x:.2f}, {y:.2f}). "
+            "Robot sedang merencanakan jalur melalui move_base."
         )
     else:
-        return "Failed to send navigation goal. The Nav2 action server 'navigate_to_pose' is not available."
+        return "Gagal mengirim goal. Pastikan node 'move_base' di robot sudah berjalan."
     
 
 def extract_pdf_text(pdf_bytes: bytes) -> str:

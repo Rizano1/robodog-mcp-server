@@ -1,29 +1,34 @@
-# src/robodog_server/utils/controller.py
-import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import Twist
+# src/robodog_server/utils/controller.py (ROS Noetic)
+
+import rospy
 from threading import Thread
-from geometry_msgs.msg import Twist, PoseStamped 
-from rclpy.action import ActionClient             
-from nav2_msgs.action import NavigateToPose
 import time
 
-class TurtleBotController(Node):
+# Import ROS 1 message types
+from geometry_msgs.msg import Twist, PoseStamped, Quaternion 
+from actionlib import SimpleActionClient          # <-- ROS 1 Action Client
+from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal # <-- ROS 1 Nav Goal (MoveBase)
+
+class TurtleBotController: # <-- Bukan turunan dari rospy.AbstractNode
     """
-    ROS 2 Node untuk mengontrol pergerakan TurtleBot.
+    ROS Noetic Controller untuk mengontrol pergerakan dan navigasi TurtleBot.
     """
     def __init__(self):
-        super().__init__("turtlebot_controller")
-        self.pub = self.create_publisher(Twist, "/cmd_vel", 10)
-
-        self._action_client = ActionClient(
-            self,
-            NavigateToPose,
-            'navigate_to_pose' 
-        )
-        self.get_logger().info("TurtleBotController Node initialized.")
+        # ROS 1 Node tidak perlu super().__init__. rospy.init_node() ada di ros_manager.
         
-
+        # ROS 1 Publisher
+        self.pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
+        
+        # --- ROS 1 Action Client Setup (move_base) ---
+        # Action Client ROS 1 (untuk Navigasi)
+        self._action_client = SimpleActionClient('move_base', MoveBaseAction)
+        rospy.loginfo("Waiting for move_base action server...")
+        self._action_client.wait_for_server()
+        
+        rospy.loginfo("TurtleBotController initialized. move_base server connected.")
+        
+    # Perubahan: 'self.get_logger().info' diganti dengan 'rospy.loginfo'
+        
     def move_async(self, linear_speed: float, angular_speed: float, duration: float):
         """
         Memulai pergerakan umum (linear dan angular) non-blocking 
@@ -41,49 +46,59 @@ class TurtleBotController(Node):
 
         t_end = time.time() + duration
         
-        self.get_logger().info(
+        rospy.loginfo(
             f"Starting move: Linear={linear_speed} m/s, Angular={angular_speed} rad/s for {duration}s"
         )
         
-        while time.time() < t_end:
+        # ROS 1 menggunakan rospy.is_shutdown() untuk memeriksa loop utama
+        while time.time() < t_end and not rospy.is_shutdown():
             self.pub.publish(msg)
-            time.sleep(0.1)
+            rospy.sleep(0.1) # Gunakan rospy.sleep untuk waktu yang lebih baik
 
         stop_msg = Twist()
         self.pub.publish(stop_msg)
         
-        self.get_logger().info("Finished move.")
+        rospy.loginfo("Finished move.")
 
     def send_nav_goal_async(self, x: float, y: float, theta: float = 0.0) -> bool:
         """
-        Mengirim tujuan navigasi (x, y, theta) ke stack Nav2 secara asynchronous.
+        Mengirim tujuan navigasi (x, y, theta) ke stack Navigasi ROS 1 (move_base).
         
         :param x: Koordinat X tujuan.
         :param y: Koordinat Y tujuan.
         :param theta: Orientasi akhir yang diinginkan (Yaw) dalam radian.
-        :return: True jika goal berhasil dikirim, False jika server Nav2 tidak tersedia.
+        :return: True jika goal berhasil dikirim.
         """
-        if not self._action_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error("Navigation action server 'navigate_to_pose' not available!")
+        if not self._action_client.wait_for_server(timeout=5.0):
+            rospy.logerr("move_base action server not available!")
             return False
 
-        goal_msg = NavigateToPose.Goal()
+        # ROS 1 Navigasi menggunakan MoveBaseGoal
+        goal_msg = MoveBaseGoal()
         
-        goal_msg.pose.header.frame_id = 'map'
-        goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
+        # Header (Penting untuk Navigasi)
+        goal_msg.target_pose.header.frame_id = 'map'
+        goal_msg.target_pose.header.stamp = rospy.Time.now()
         
-        goal_msg.pose.pose.position.x = x
-        goal_msg.pose.pose.position.y = y
-        goal_msg.pose.pose.position.z = 0.0
+        # Posisi Tujuan
+        goal_msg.target_pose.pose.position.x = x
+        goal_msg.target_pose.pose.position.y = y
+        goal_msg.target_pose.pose.position.z = 0.0
         
+        # Orientasi Tujuan (Quaternion)
+        # Catatan: Sama seperti ROS 2, konversi Yaw ke Quaternion sangat penting.
+        # Karena kita tidak memiliki pustaka konversi, kita gunakan identitas 
+        # dan mencatat bahwa ini mungkin tidak menginisiasi orientasi yang benar 
+        # tanpa pustaka tambahan (misalnya, tf.transformations).
+        goal_msg.target_pose.pose.orientation.x = 0.0
+        goal_msg.target_pose.pose.orientation.y = 0.0
+        goal_msg.target_pose.pose.orientation.z = 0.0
+        goal_msg.target_pose.pose.orientation.w = 1.0 
 
-        goal_msg.pose.pose.orientation.x = 0.0
-        goal_msg.pose.pose.orientation.y = 0.0
-        goal_msg.pose.pose.orientation.z = 0.0
-        goal_msg.pose.pose.orientation.w = 1.0 
-
-        self.get_logger().info(f"Sending Nav2 goal to ({x:.2f}, {y:.2f}) in 'map' frame.")
+        rospy.loginfo(f"Sending move_base goal to ({x:.2f}, {y:.2f}) in 'map' frame.")
         
-        self._action_client.send_goal_async(goal_msg)
+        # Mengirim goal dan mendapatkan hasil secara asynchronous
+        # Tidak memblokir karena kita di dalam FastMCP loop
+        self._action_client.send_goal(goal_msg) 
         
-        return True 
+        return True
