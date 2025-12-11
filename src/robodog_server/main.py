@@ -1,0 +1,14 @@
+from .utils.ros_manager import start_ros2_execution
+from .utils.tools import mcp 
+
+def main():
+    """
+    Titik masuk utama program.
+    """
+    start_ros2_execution()
+    
+    print("\nStarting FastMCP HTTP server...")
+    mcp.run("http", host="0.0.0.0", port=8000)
+
+if __name__ == "__main__":
+    main()
