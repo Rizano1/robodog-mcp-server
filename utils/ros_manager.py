@@ -4,7 +4,7 @@ import rospy
 from threading import Thread
 
 # Import Node yang sudah didefinisikan (di ROS 1, Node biasanya adalah kelas Python biasa)
-from .controller import TurtleBotController
+from utils.controller import TurtleBotController
 
 # Inisiasi Node Controller
 NODE_CONTROLLER = None
