@@ -1,9 +1,11 @@
 import os
 import io
+import math
 import base64
+from datetime import datetime
 from fastmcp import FastMCP
 from supabase import create_client, Client
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from io import BytesIO
 from pypdf import PdfReader
 from dotenv import load_dotenv
@@ -40,7 +42,7 @@ def create_response(type: str, status: str, message: str, data: Any = None) -> d
 # --- TOOLS: ROBOT ACTION ---
 
 @mcp.tool
-def move(linear_speed: float = 0.0, angular_speed: float = 0.0, duration: float = 5.0) -> dict:
+def move(linear_speed: float = 0.0, angular_speed: float = 0.0, duration: float = 5.0, session_id: Optional[str] = None) -> dict:
     """
     Memerintahkan robot untuk bergerak manual (open-loop).
     """
@@ -54,7 +56,7 @@ def move(linear_speed: float = 0.0, angular_speed: float = 0.0, duration: float 
         )
 
     # Memanggil metode async pada controller Noetic
-    controller.move_async(linear_speed, angular_speed, duration)
+    controller.move_async(linear_speed, angular_speed, duration, session_id)
     
     return create_response(
         type="robot_action",
@@ -68,9 +70,14 @@ def move(linear_speed: float = 0.0, angular_speed: float = 0.0, duration: float 
     )
 
 @mcp.tool
-def navigate_to_waypoint(x: float, y: float, theta: float = 0.0) -> dict:
+def navigate_to_waypoint(x: float, y: float, theta_deg: float = 0.0, session_id: Optional[str] = None) -> dict:
     """
     Mengirimkan tujuan navigasi ke stack move_base (ROS 1).
+    Args:
+        x: Target X position in meters (map frame)
+        y: Target Y position in meters (map frame)
+        theta_deg: Target orientation in degrees (0=East, 90=North, 180=West, -90=South)
+        session_id: Chat session ID (auto-injected by client)
     """
     controller = get_controller_node()
 
@@ -81,15 +88,18 @@ def navigate_to_waypoint(x: float, y: float, theta: float = 0.0) -> dict:
             message="Controller ROS Noetic tidak tersedia."
         )
 
+    # Convert degrees to radians for move_base
+    theta_rad = math.radians(theta_deg)
+
     # Mengirim goal ke Action Server move_base
-    goal_sent = controller.send_nav_goal_async(x, y, theta)
+    goal_sent = controller.send_nav_goal_async(x, y, theta_rad, session_id)
     
     if goal_sent:
         return create_response(
             type="robot_action",
             status="running",
-            message="Goal navigasi berhasil dikirim. Robot sedang merencanakan jalur.",
-            data={"target_x": x, "target_y": y, "target_theta": theta}
+            message=f"Goal navigasi berhasil dikirim. Robot menuju ({x:.2f}, {y:.2f}) arah {theta_deg:.0f}°.",
+            data={"target_x": x, "target_y": y, "target_theta_deg": theta_deg}
         )
     else:
         return create_response(
@@ -101,7 +111,7 @@ def navigate_to_waypoint(x: float, y: float, theta: float = 0.0) -> dict:
 # --- TOOLS: DATABASE QUERY ---
 
 @mcp.tool
-def get_object_waypoints(query: str) -> dict:
+def get_object_waypoints(query: str, session_id: Optional[str] = None) -> dict:
     """
     Mencari koordinat objek atau lokasi di database Supabase (tabel 'waypoints').
     Dengan query :
@@ -128,6 +138,8 @@ def get_object_waypoints(query: str) -> dict:
             
         formatted_data = []
         for item in data:
+            # Convert view_yaw from radians (DB) to degrees for the LLM
+            
             formatted_data.append({
                 "id": item.get("slug"),
                 "name": item.get("display_name"),
@@ -135,7 +147,7 @@ def get_object_waypoints(query: str) -> dict:
                 "nav_target": {
                     "x": item.get("view_x"),
                     "y": item.get("view_y"),
-                    "theta": item.get("view_yaw")
+                    "theta_deg": item.get("view_yaw")
                 },
                 "object_pos": {
                     "x": item.get("obj_x"), 
@@ -160,7 +172,7 @@ def get_object_waypoints(query: str) -> dict:
 # --- TOOLS: FILE RETRIEVAL (SOP) ---
 
 @mcp.tool
-def list_sop_files() -> dict:
+def list_sop_files(session_id: Optional[str] = None) -> dict:
     """
     Mengambil daftar file dalam bucket Supabase 'SOP'.
     """
@@ -198,9 +210,11 @@ def list_sop_files() -> dict:
         )
 
 @mcp.tool
-def get_sop_file(file_name: str) -> dict:
+def get_sop_file(file_name: str, session_id: Optional[str] = None) -> dict:
     """
     Mengambil filepath
+    args:
+        file_name: Nama full file SOP yang akan diambil berdasarkan list_sop_files.
     """
 
     return create_response(
@@ -213,3 +227,62 @@ def get_sop_file(file_name: str) -> dict:
         }
     )
 
+# --- TOOLS: CAMERA CAPTURE & UPLOAD ---
+
+@mcp.tool
+def capture_and_upload_image(session_id: Optional[str] = None) -> dict:
+    """
+    Mengambil gambar dari kamera robot (/camera/image_raw),
+    menguploadnya ke Supabase Storage bucket 'robotics-prata' folder 'captured',
+    dan mengembalikan public URL untuk diakses langsung oleh client.
+    """
+    controller = get_controller_node()
+
+    if controller is None:
+        return create_response(
+            type="image_capture",
+            status="error",
+            message="Controller ROS Noetic belum siap. Pastikan roscore sudah berjalan."
+        )
+
+    # 1. Capture image dari kamera
+    jpeg_bytes = controller.capture_image(timeout=10.0)
+
+    if jpeg_bytes is None:
+        return create_response(
+            type="image_capture",
+            status="error",
+            message="Gagal mengambil gambar. Tidak ada frame dari /camera/image_raw (timeout)."
+        )
+
+    # 2. Generate nama file dengan timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filepath = f"captured/capture_{timestamp}.jpg"
+
+    try:
+        # 3. Upload ke Supabase Storage
+        supabase.storage.from_(BUCKET_NAME).upload(
+            path=filepath,
+            file=jpeg_bytes,
+            file_options={"content-type": "image/jpeg"}
+        )
+
+        # 4. Buat public URL
+        public_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{filepath}"
+
+        return create_response(
+            type="image_capture",
+            status="success",
+            message=f"Gambar berhasil diambil dan diupload.",
+            data={
+                "filepath": filepath,
+                "public_url": public_url
+            }
+        )
+
+    except Exception as e:
+        return create_response(
+            type="image_capture",
+            status="error",
+            message=f"Gagal mengupload gambar ke Supabase: {str(e)}"
+        )

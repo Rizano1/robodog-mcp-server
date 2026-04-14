@@ -1,14 +1,19 @@
 import rospy
 import requests
 import time
-from threading import Thread
+import cv2
+import numpy as np
+from threading import Thread, Event
 from geometry_msgs.msg import Twist
 from actionlib import SimpleActionClient
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from tf.transformations import quaternion_from_euler
 
-# URL Webhook FastAPI (Sesuaikan dengan IP host Anda)
-API_CALLBACK_URL = "http://0.0.0.0:8080/api/chat_robot"
+# Import ROS 1 message types for camera
+from sensor_msgs.msg import Image as RosImage
+
+# URL Webhook FastAPI (localhost, not 0.0.0.0 — that's a listen address, not a connect address)
+API_CALLBACK_URL = "http://localhost:8080/api/chat_robot"
 
 class TurtleBotController:
     def __init__(self):
@@ -34,11 +39,12 @@ class TurtleBotController:
         
         try:
             payload = {
-                "session_id": session_id,
-                "message": message,
+                "session_id": int(session_id),
+                "user_prompt": message,
             }
             # Timeout pendek agar tidak memblokir thread robot jika API down
-            requests.post(API_CALLBACK_URL, json=payload, timeout=3.0)
+            resp = requests.post(API_CALLBACK_URL, json=payload, timeout=5.0)
+            rospy.loginfo(f"📡 Webhook response: {resp.status_code}")
         except Exception as e:
             rospy.logerr(f"❌ Failed to report event to API: {e}")
 
@@ -101,20 +107,69 @@ class TurtleBotController:
         goal.target_pose.pose.orientation.z = q[2]
         goal.target_pose.pose.orientation.w = q[3]
 
+        rospy.loginfo(f"Sending move_base goal to ({x:.2f}, {y:.2f}, {theta:.2f}) in 'map' frame.")
+
         # Callback Internal
         def done_callback(status, result):
-            # Status 3 = SUCCEEDED
+            # Status 3 = SUCCEEDED (actionlib GoalStatus)
             is_success = (status == 3)
-            status_str = "SUCCESS" if is_success else "FAILED"
             
-            msg_text = (
-                f"✅ [ROBOT] Sampai di titik navigasi ({x}, {y})." 
-                if is_success else 
-                f"⚠️ [ROBOT] Gagal mencapai titik ({x}, {y}). Ada halangan atau path invalid."
-            )
+            if is_success:
+                msg_text = f"✅ [ROBOT] Sampai di titik navigasi ({x}, {y})."
+            else:
+                msg_text = f"⚠️ [ROBOT] Gagal mencapai titik ({x}, {y}). Ada halangan atau path invalid."
             
+            rospy.loginfo(msg_text)
             # --- LAPOR KE WEBHOOK (REUSABLE) ---
             self._report_event(session_id, msg_text)
 
         self._action_client.send_goal(goal, done_cb=done_callback)
         return True
+
+    # --- 3. CAMERA IMAGE CAPTURE ---
+
+    def capture_image(self, timeout: float = 7.0) -> bytes | None:
+        """
+        Mengambil satu frame dari stream RTSP secara langsung.
+        Mengembalikan None jika gagal atau timeout.
+        """
+        rospy.loginfo("📸 Capturing frame from RTSP stream...")
+        try:
+            # Buka stream RTSP
+            cap = cv2.VideoCapture("rtsp://10.7.101.231:8554/front_facing", cv2.CAP_FFMPEG)
+            
+            start_time = time.time()
+            # Tunggu sampai stream bisa dibuka atau timeout
+            while not cap.isOpened():
+                if time.time() - start_time > timeout:
+                    rospy.logwarn("⚠️ Timeout waiting for RTSP stream to open.")
+                    return None
+                rospy.sleep(0.1)
+                
+            # Kurangi ukuran buffer untuk mendapatkan frame paling update
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            
+            # Buang beberapa frame pertama (membasuh buffer)
+            for _ in range(3):
+                success, frame = cap.read()
+                if not success:
+                    break
+                    
+            if not success or frame is None:
+                rospy.logwarn("⚠️ Failed to read frame from RTSP stream.")
+                cap.release()
+                return None
+                
+            # OpenCV menggunakan format BGR, encode langsung ke JPEG
+            success_encode, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            cap.release()
+            
+            if success_encode:
+                return buffer.tobytes()
+            else:
+                rospy.logwarn("⚠️ Failed to encode frame to JPEG.")
+                return None
+                
+        except Exception as e:
+            rospy.logerr(f"❌ Error during RTSP capture: {e}")
+            return None
