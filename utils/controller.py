@@ -1,16 +1,11 @@
 import rospy
 import requests
 import time
-import cv2
-import numpy as np
 from threading import Thread, Event
 from geometry_msgs.msg import Twist
 from actionlib import SimpleActionClient
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from tf.transformations import quaternion_from_euler
-
-# Import ROS 1 message types for camera
-from sensor_msgs.msg import Image as RosImage
 
 # URL Webhook FastAPI (localhost, not 0.0.0.0 — that's a listen address, not a connect address)
 API_CALLBACK_URL = "http://localhost:8080/api/chat_robot"
@@ -126,50 +121,33 @@ class TurtleBotController:
         self._action_client.send_goal(goal, done_cb=done_callback)
         return True
 
-    # --- 3. CAMERA IMAGE CAPTURE ---
+    # --- 3. CAMERA IMAGE CAPTURE (via go2rtc HTTP snapshot) ---
+
+    GO2RTC_SNAPSHOT_URL = "http://10.7.101.231:1984/api/frame.jpeg?src=front_facing"
 
     def capture_image(self, timeout: float = 7.0) -> bytes | None:
         """
-        Mengambil satu frame dari stream RTSP secara langsung.
-        Mengembalikan None jika gagal atau timeout.
+        Mengambil satu frame dari go2rtc HTTP snapshot API.
+        Endpoint: /api/frame.jpeg?src=front_facing
+        Mengembalikan JPEG bytes atau None jika gagal.
         """
-        rospy.loginfo("📸 Capturing frame from RTSP stream...")
+        rospy.loginfo("📸 Capturing frame from go2rtc snapshot API...")
         try:
-            # Buka stream RTSP
-            cap = cv2.VideoCapture("rtsp://10.7.101.231:8554/front_facing", cv2.CAP_FFMPEG)
-            
-            start_time = time.time()
-            # Tunggu sampai stream bisa dibuka atau timeout
-            while not cap.isOpened():
-                if time.time() - start_time > timeout:
-                    rospy.logwarn("⚠️ Timeout waiting for RTSP stream to open.")
-                    return None
-                rospy.sleep(0.1)
-                
-            # Kurangi ukuran buffer untuk mendapatkan frame paling update
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            
-            # Buang beberapa frame pertama (membasuh buffer)
-            for _ in range(3):
-                success, frame = cap.read()
-                if not success:
-                    break
-                    
-            if not success or frame is None:
-                rospy.logwarn("⚠️ Failed to read frame from RTSP stream.")
-                cap.release()
-                return None
-                
-            # OpenCV menggunakan format BGR, encode langsung ke JPEG
-            success_encode, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            cap.release()
-            
-            if success_encode:
-                return buffer.tobytes()
+            resp = requests.get(self.GO2RTC_SNAPSHOT_URL, timeout=timeout)
+
+            if resp.status_code == 200 and resp.headers.get("Content-Type", "").startswith("image/"):
+                rospy.loginfo(f"📸 Frame captured successfully ({len(resp.content)} bytes).")
+                return resp.content
             else:
-                rospy.logwarn("⚠️ Failed to encode frame to JPEG.")
+                rospy.logwarn(
+                    f"⚠️ Unexpected response from go2rtc: "
+                    f"status={resp.status_code}, content-type={resp.headers.get('Content-Type')}"
+                )
                 return None
-                
+
+        except requests.exceptions.Timeout:
+            rospy.logwarn("⚠️ Timeout capturing frame from go2rtc snapshot API.")
+            return None
         except Exception as e:
-            rospy.logerr(f"❌ Error during RTSP capture: {e}")
+            rospy.logerr(f"❌ Error during go2rtc snapshot capture: {e}")
             return None

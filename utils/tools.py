@@ -232,7 +232,7 @@ def get_sop_file(file_name: str, session_id: Optional[str] = None) -> dict:
 @mcp.tool
 def capture_and_upload_image(session_id: Optional[str] = None) -> dict:
     """
-    Mengambil gambar dari kamera robot (/camera/image_raw),
+    Mengambil gambar dari kamera robot via go2rtc snapshot API,
     menguploadnya ke Supabase Storage bucket 'robotics-prata' folder 'captured',
     dan mengembalikan public URL untuk diakses langsung oleh client.
     """
@@ -252,7 +252,7 @@ def capture_and_upload_image(session_id: Optional[str] = None) -> dict:
         return create_response(
             type="image_capture",
             status="error",
-            message="Gagal mengambil gambar. Tidak ada frame dari /camera/image_raw (timeout)."
+            message="Gagal mengambil gambar dari go2rtc snapshot API (timeout atau stream tidak tersedia)."
         )
 
     # 2. Generate nama file dengan timestamp
