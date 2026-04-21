@@ -8,7 +8,7 @@ from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from tf.transformations import quaternion_from_euler
 
 # URL Webhook FastAPI (localhost, not 0.0.0.0 — that's a listen address, not a connect address)
-API_CALLBACK_URL = "http://localhost:8080/api/chat_robot"
+API_CALLBACK_URL = "http://localhost:8082/api/chat_robot"
 
 class TurtleBotController:
     def __init__(self):
