@@ -1,0 +1,7 @@
+fastmcp>=2.13.1
+supabase>=2.24.0
+numpy>=2.2.6
+pypdf>=6.4.0
+python-docx>=1.2.0
+python-dotenv
+requests
