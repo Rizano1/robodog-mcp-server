@@ -111,54 +111,175 @@ def navigate_to_waypoint(x: float, y: float, theta_deg: float = 0.0, session_id:
 # --- TOOLS: DATABASE QUERY ---
 
 @mcp.tool
-def get_object_waypoints(query: str, session_id: Optional[str] = None) -> dict:
+def get_object_waypoints(query: str, location: Optional[str] = None, session_id: Optional[str] = None) -> dict:
     """
-    Mencari koordinat objek atau lokasi di database Supabase (tabel 'waypoints').
-    Dengan query :
-    supabase.table("object-waypoints").select("*").or_(
-            f"slug.ilike.{search_term},display_name.ilike.{search_term},group_tag.ilike.{search_term}"
-    ).execute()
+    Mencari objek inspeksi dan koordinat waypoint-nya di database.
+    Mengembalikan data hierarkis: Map → Location path → Object → Waypoint.
+
+    Args:
+        query: Kata kunci pencarian (nama objek, keywords, atau nama lokasi).
+               Contoh: "pressure tank", "valve", "pompa".
+        location: (Opsional) Filter berdasarkan nama lokasi tertentu.
+                  Contoh: "Boiler Room", "Floor 1".
+        session_id: Chat session ID (auto-injected by client).
     """
     try:
         search_term = f"%{query}%"
-        
-        response = supabase.table("object-waypoints").select("*").or_(
-            f"slug.ilike.{search_term},display_name.ilike.{search_term},group_tag.ilike.{search_term}"
+
+        # --- 1. Search objects by name & keywords ---
+        obj_response = supabase.table("objects").select("*").or_(
+            f"name.ilike.{search_term},keywords.cs.{{{query}}}"
         ).execute()
-        
-        data = response.data
-        
-        if not data:
+        matched_object_ids = [obj["id"] for obj in (obj_response.data or [])]
+
+        # --- 2. Search waypoints by display_name OR matching object_id ---
+        if matched_object_ids:
+            # Build filter: waypoints whose object_id matches OR display_name matches
+            obj_id_filter = ",".join(str(i) for i in matched_object_ids)
+            wp_response = supabase.table("object-waypoints").select("*").or_(
+                f"display_name.ilike.{search_term},object_id.in.({obj_id_filter})"
+            ).execute()
+        else:
+            wp_response = supabase.table("object-waypoints").select("*").ilike(
+                "display_name", search_term
+            ).execute()
+
+        waypoints = wp_response.data or []
+
+        if not waypoints:
             return create_response(
                 type="navigation_query",
                 status="empty",
-                message=f"Tidak ditemukan objek atau lokasi dengan kata kunci '{query}'.",
+                message=f"Tidak ditemukan objek dengan kata kunci '{query}'.",
                 data=[]
             )
-            
+
+        # --- 3. Collect all referenced IDs for batch lookup ---
+        location_ids = set()
+        object_ids = set()
+        for wp in waypoints:
+            if wp.get("parent_id"):
+                location_ids.add(wp["parent_id"])
+            if wp.get("object_id"):
+                object_ids.add(wp["object_id"])
+
+        # --- 4. Fetch all locations (for building hierarchy chain) ---
+        all_locations = {}
+        if location_ids:
+            loc_response = supabase.table("locations").select("*").execute()
+            for loc in (loc_response.data or []):
+                all_locations[loc["id"]] = loc
+
+        # --- 5. Fetch referenced objects ---
+        objects_map = {}
+        if object_ids:
+            obj_ids_str = ",".join(str(i) for i in object_ids)
+            obj_detail = supabase.table("objects").select("*").in_(
+                "id", list(object_ids)
+            ).execute()
+            for obj in (obj_detail.data or []):
+                objects_map[obj["id"]] = obj
+
+        # --- 6. Fetch all maps ---
+        maps_map = {}
+        map_response = supabase.table("maps").select("*").execute()
+        for m in (map_response.data or []):
+            maps_map[m["id"]] = m
+
+        # --- 7. Helper: build location path (walk up parent chain) ---
+        def build_location_path(loc_id: int) -> List[Dict]:
+            """Returns list from root to leaf: [map_name, loc1, loc2, ...]"""
+            chain = []
+            visited = set()
+            current_id = loc_id
+            while current_id and current_id in all_locations and current_id not in visited:
+                visited.add(current_id)
+                loc = all_locations[current_id]
+                chain.append({"name": loc.get("name"), "type": loc.get("type"), "id": loc["id"]})
+                current_id = loc.get("parent_id")
+            chain.reverse()  # root → leaf
+            return chain
+
+        # --- 8. Filter by location name if specified ---
+        if location:
+            location_lower = location.lower()
+            matching_loc_ids = set()
+            for loc_id, loc in all_locations.items():
+                if location_lower in (loc.get("name") or "").lower():
+                    # Include this location and all its descendants
+                    matching_loc_ids.add(loc_id)
+                    # Add children recursively
+                    queue = [loc_id]
+                    while queue:
+                        pid = queue.pop()
+                        for child_id, child in all_locations.items():
+                            if child.get("parent_id") == pid and child_id not in matching_loc_ids:
+                                matching_loc_ids.add(child_id)
+                                queue.append(child_id)
+
+            waypoints = [wp for wp in waypoints if wp.get("parent_id") in matching_loc_ids]
+
+            if not waypoints:
+                return create_response(
+                    type="navigation_query",
+                    status="empty",
+                    message=f"Tidak ditemukan '{query}' di lokasi '{location}'.",
+                    data=[]
+                )
+
+        # --- 9. Format hierarchical results ---
         formatted_data = []
-        for item in data:
-            # Convert view_yaw from radians (DB) to degrees for the LLM
-            
+        for wp in waypoints:
+            obj = objects_map.get(wp.get("object_id"), {})
+            loc_id = wp.get("parent_id")
+            location_path = build_location_path(loc_id) if loc_id else []
+
+            # Resolve map name from the location's map_id
+            map_name = None
+            if loc_id and loc_id in all_locations:
+                map_id = all_locations[loc_id].get("map_id")
+                if map_id and map_id in maps_map:
+                    map_name = maps_map[map_id].get("name")
+
             formatted_data.append({
-                "id": item.get("slug"),
-                "name": item.get("display_name"),
-                "group": item.get("group_tag"),
-                "nav_target": {
-                    "x": item.get("view_x"),
-                    "y": item.get("view_y"),
-                    "theta_deg": item.get("view_yaw")
+                "waypoint_id": wp.get("id"),
+                "display_name": wp.get("display_name"),
+                "object": {
+                    "id": obj.get("id"),
+                    "name": obj.get("name"),
+                    "keywords": obj.get("keywords", []),
+                    "sop_url": obj.get("sop_url"),
                 },
-                "object_pos": {
-                    "x": item.get("obj_x"), 
-                    "y": item.get("obj_y")
-                }
+                "spatial_context": {
+                    "map": map_name,
+                    "location_path": " > ".join(
+                        [f"{l['name']} ({l['type']})" if l.get("type") else l["name"]
+                         for l in location_path]
+                    ),
+                    "location_name": location_path[-1]["name"] if location_path else None,
+                },
+                "coordinates": {
+                    "nav_target": {
+                        "x": wp.get("view_x"),
+                        "y": wp.get("view_y"),
+                        "theta_deg": wp.get("view_yaw"),
+                    },
+                    "object_position": {
+                        "x": wp.get("obj_x"),
+                        "y": wp.get("obj_y"),
+                    },
+                    "camera": {
+                        "pan": wp.get("camera_pan"),
+                        "tilt": wp.get("camera_tilt"),
+                        "zoom": wp.get("camera_zoom"),
+                    },
+                },
             })
 
         return create_response(
             type="navigation_query",
             status="success",
-            message=f"Ditemukan {len(data)} lokasi yang cocok.",
+            message=f"Ditemukan {len(formatted_data)} waypoint yang cocok untuk '{query}'.",
             data=formatted_data
         )
 
