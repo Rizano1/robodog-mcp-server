@@ -108,6 +108,60 @@ def navigate_to_waypoint(x: float, y: float, theta_deg: float = 0.0, session_id:
             message="Gagal mengirim goal. Pastikan node 'move_base' di robot sudah berjalan."
         )
 
+@mcp.tool
+def toggle_sit_stand(session_id: Optional[str] = None) -> dict:
+    """
+    Memerintahkan robot untuk mengganti state antara duduk (sit) dan berdiri (stand).
+    Perintah ini menggunakan SimpleCMD dengan kode 0x21010202.
+    """
+    controller = get_controller_node()
+
+    if controller is None:
+        return create_response(
+            type="robot_action",
+            status="error",
+            message="Controller ROS Noetic tidak tersedia."
+        )
+
+    # 0x21010202 adalah command untuk switch antara duduk dan berdiri
+    controller.send_simple_cmd(cmd_code=0x21010202, cmd_value=0, cmd_type=0, session_id=session_id)
+
+    return create_response(
+        type="robot_action",
+        status="success",
+        message="Perintah Sit/Stand berhasil dikirim.",
+        data={"cmd_code": "0x21010202"}
+    )
+
+@mcp.tool
+def look_up_down(angle_value: int, session_id: Optional[str] = None) -> dict:
+    """
+    Memerintahkan robot untuk menunduk (look down) atau menengadah (look up) dengan mengatur pitch angle.
+    Args:
+        angle_value: Nilai antara -6553 sampai 6553. Positif (>0) untuk menunduk, negatif (<0) untuk menengadah. 0 untuk netral.
+        session_id: Chat session ID (auto-injected by client)
+    """
+    controller = get_controller_node()
+
+    if controller is None:
+        return create_response(
+            type="robot_action",
+            status="error",
+            message="Controller ROS Noetic tidak tersedia."
+        )
+
+    # 0x21010130 adalah command untuk Adjust Pitch Angle
+    # Batasi nilai agar sesuai dengan spesifikasi [-6553, 6553]
+    clamped_value = max(-6553, min(6553, angle_value))
+    controller.send_simple_cmd(cmd_code=0x21010130, cmd_value=clamped_value, cmd_type=0, session_id=session_id)
+
+    return create_response(
+        type="robot_action",
+        status="success",
+        message=f"Perintah Look Up/Down berhasil dikirim dengan nilai pitch {clamped_value}.",
+        data={"cmd_code": "0x21010130", "cmd_value": clamped_value}
+    )
+
 # --- TOOLS: DATABASE QUERY ---
 
 @mcp.tool

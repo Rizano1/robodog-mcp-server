@@ -6,6 +6,7 @@ from geometry_msgs.msg import Twist
 from actionlib import SimpleActionClient
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from tf.transformations import quaternion_from_euler
+from message_transformer.msg import SimpleCMD
 
 # URL Webhook FastAPI (localhost, not 0.0.0.0 — that's a listen address, not a connect address)
 API_CALLBACK_URL = "http://localhost:8082/api/chat_robot"
@@ -13,6 +14,8 @@ API_CALLBACK_URL = "http://localhost:8082/api/chat_robot"
 class TurtleBotController:
     def __init__(self):
         self.pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
+        
+        self.simple_cmd_pub = rospy.Publisher('/simple_cmd', SimpleCMD, queue_size=10)
         
         # Navigasi Action Client
         self._action_client = SimpleActionClient('move_base', MoveBaseAction)
@@ -123,7 +126,7 @@ class TurtleBotController:
 
     # --- 3. CAMERA IMAGE CAPTURE (via go2rtc HTTP snapshot) ---
 
-    GO2RTC_SNAPSHOT_URL = "http://10.7.101.231:1984/api/frame.jpeg?src=front_facing"
+    GO2RTC_SNAPSHOT_URL = "http://localhost:1984/api/frame.jpeg?src=front_facing_low"
 
     def capture_image(self, timeout: float = 7.0) -> bytes | None:
         """
@@ -151,3 +154,23 @@ class TurtleBotController:
         except Exception as e:
             rospy.logerr(f"❌ Error during go2rtc snapshot capture: {e}")
             return None
+
+    # --- 4. SIMPLE COMMANDS (SIT/STAND, LOOK UP/DOWN, DLL) ---
+
+    def send_simple_cmd(self, cmd_code: int, cmd_value: int = 0, cmd_type: int = 0, session_id: str = None):
+        """
+        Mengirimkan perintah SimpleCMD ke robot.
+        """
+        msg = SimpleCMD()
+        msg.cmd_code = cmd_code
+        msg.cmd_value = cmd_value
+        msg.type = cmd_type
+        
+        self.simple_cmd_pub.publish(msg)
+        rospy.loginfo(f"Published SimpleCMD: code={hex(cmd_code)}, value={cmd_value}, type={cmd_type}")
+        
+        if session_id:
+            report_msg = f"✅ [ROBOT] Command terkirim (code: {hex(cmd_code)}, value: {cmd_value})"
+            self._report_event(session_id, report_msg)
+            
+        return True
