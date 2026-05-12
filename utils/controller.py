@@ -174,3 +174,39 @@ class TurtleBotController:
             self._report_event(session_id, report_msg)
             
         return True
+
+    def pose_async(self, pitch_angle: int, duration: float = 3.0, session_id: str = None):
+        """
+        Mengubah robot ke Pose Mode dan menahan pitch angle selama durasi tertentu.
+        """
+        Thread(
+            target=self._pose_blocking,
+            args=(pitch_angle, duration, session_id),
+            daemon=True
+        ).start()
+
+    def _pose_blocking(self, pitch_angle: int, duration: float, session_id: str):
+        """
+        Logic menahan pose: Set Pose Mode -> Loop kirim command -> Set Move Mode
+        """
+        rospy.loginfo(f"Entering Pose Mode for {duration}s with pitch {pitch_angle}...")
+        
+        # 1. Masuk ke Pose Mode
+        self.send_simple_cmd(cmd_code=0x21010D05)
+        rospy.sleep(0.1)
+
+        t_end = time.time() + duration
+        
+        # 2. Kirim perintah Pitch (Axis Command) berulang-ulang
+        # Axis command dianggap invalid setelah 1 detik jika tidak ada update
+        while time.time() < t_end and not rospy.is_shutdown():
+            self.send_simple_cmd(cmd_code=0x21010130, cmd_value=pitch_angle)
+            rospy.sleep(0.2) # Kirim 5Hz
+
+        # 3. Kembalikan ke Move Mode
+        rospy.loginfo("Exiting Pose Mode, returning to Move Mode...")
+        self.send_simple_cmd(cmd_code=0x21010D06)
+
+        # 4. Lapor ke Webhook
+        report_msg = f"✅ [ROBOT] Pose Look Up/Down ({pitch_angle}) selama {duration} detik selesai."
+        self._report_event(session_id, report_msg)

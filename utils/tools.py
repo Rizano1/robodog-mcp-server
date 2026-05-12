@@ -134,11 +134,12 @@ def toggle_sit_stand(session_id: Optional[str] = None) -> dict:
     )
 
 @mcp.tool
-def look_up_down(angle_value: int, session_id: Optional[str] = None) -> dict:
+def look_up_down(angle_value: int, duration: float = 3.0, session_id: Optional[str] = None) -> dict:
     """
-    Memerintahkan robot untuk menunduk (look down) atau menengadah (look up) dengan mengatur pitch angle.
+    Memerintahkan robot untuk menunduk (look down) atau menengadah (look up) dengan mengatur pitch angle, berjalan secara asinkron.
     Args:
         angle_value: Nilai antara -6553 sampai 6553. Positif (>0) untuk menunduk, negatif (<0) untuk menengadah. 0 untuk netral.
+        duration: Lama waktu (dalam detik) robot menahan pose ini sebelum kembali normal. Default: 3.0.
         session_id: Chat session ID (auto-injected by client)
     """
     controller = get_controller_node()
@@ -150,16 +151,17 @@ def look_up_down(angle_value: int, session_id: Optional[str] = None) -> dict:
             message="Controller ROS Noetic tidak tersedia."
         )
 
-    # 0x21010130 adalah command untuk Adjust Pitch Angle
     # Batasi nilai agar sesuai dengan spesifikasi [-6553, 6553]
     clamped_value = max(-6553, min(6553, angle_value))
-    controller.send_simple_cmd(cmd_code=0x21010130, cmd_value=clamped_value, cmd_type=0, session_id=session_id)
+    
+    # Gunakan pose_async yang baru kita buat
+    controller.pose_async(pitch_angle=clamped_value, duration=duration, session_id=session_id)
 
     return create_response(
         type="robot_action",
         status="success",
-        message=f"Perintah Look Up/Down berhasil dikirim dengan nilai pitch {clamped_value}.",
-        data={"cmd_code": "0x21010130", "cmd_value": clamped_value}
+        message=f"Perintah Look Up/Down ({clamped_value}) dikirim. Robot akan menahan pose selama {duration} detik.",
+        data={"cmd_code": "pose_async", "cmd_value": clamped_value, "duration": duration}
     )
 
 # --- TOOLS: DATABASE QUERY ---
