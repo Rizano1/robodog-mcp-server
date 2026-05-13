@@ -138,7 +138,9 @@ def look_up_down(angle_value: int, duration: float = 3.0, session_id: Optional[s
     """
     Memerintahkan robot untuk menunduk (look down) atau menengadah (look up) dengan mengatur pitch angle, berjalan secara asinkron.
     Args:
-        angle_value: Nilai antara -6553 sampai 6553. Positif (>0) untuk menunduk, negatif (<0) untuk menengadah. 0 untuk netral.
+        angle_value: Nilai antara -32767 sampai 32767. 
+                     PENTING: Nilai di antara [-6553, 6553] adalah DEAD ZONE dan akan diabaikan (dianggap 0).
+                     Gunakan nilai yang lebih besar (misal: 20000 untuk menunduk, -20000 untuk menengadah).
         duration: Lama waktu (dalam detik) robot menahan pose ini sebelum kembali normal. Default: 3.0.
         session_id: Chat session ID (auto-injected by client)
     """
@@ -151,8 +153,8 @@ def look_up_down(angle_value: int, duration: float = 3.0, session_id: Optional[s
             message="Controller ROS Noetic tidak tersedia."
         )
 
-    # Batasi nilai agar sesuai dengan spesifikasi [-6553, 6553]
-    clamped_value = max(-6553, min(6553, angle_value))
+    # Batasi nilai agar sesuai dengan batas maksimal joystick [-32767, 32767]
+    clamped_value = max(-32767, min(32767, angle_value))
     
     # Gunakan pose_async yang baru kita buat
     controller.pose_async(pitch_angle=clamped_value, duration=duration, session_id=session_id)
