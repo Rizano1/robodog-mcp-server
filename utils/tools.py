@@ -453,7 +453,7 @@ def capture_and_upload_image(session_id: Optional[str] = None, inspected_object:
     if inspected_object:
         try:
             client = genai.Client()
-            prompt = f"Detect the object: {inspected_object}. If found, set is_detected to true and provide the bounding box coordinates (ymin, xmin, ymax, xmax) in pixels. The image is provided. Make sure coordinates are within the image dimensions."
+            prompt = f"Detect the object: {inspected_object}. If found, set is_detected to true and provide the bounding box coordinates (ymin, xmin, ymax, xmax) as normalized integers between 0 and 1000, where 0 is top/left and 1000 is bottom/right."
             response = client.models.generate_content(
                 model='gemini-2.5-pro',
                 contents=[
@@ -476,11 +476,22 @@ def capture_and_upload_image(session_id: Optional[str] = None, inspected_object:
                 
                 if img is not None:
                     h, w = img.shape[:2]
-                    # Clamp coordinates to valid image size
-                    ymin = max(0, min(h - 1, result.ymin))
-                    ymax = max(ymin + 1, min(h, result.ymax))
-                    xmin = max(0, min(w - 1, result.xmin))
-                    xmax = max(xmin + 1, min(w, result.xmax))
+                    
+                    # Un-normalize coordinates dari range [0, 1000] ke pixel dimensi gambar asli
+                    ymin_px = int((result.ymin / 1000.0) * h)
+                    ymax_px = int((result.ymax / 1000.0) * h)
+                    xmin_px = int((result.xmin / 1000.0) * w)
+                    xmax_px = int((result.xmax / 1000.0) * w)
+                    
+                    # Tambahkan 10% padding agar objek tidak terpotong terlalu mepet
+                    pad_y = int((ymax_px - ymin_px) * 0.1)
+                    pad_x = int((xmax_px - xmin_px) * 0.1)
+                    
+                    # Clamp coordinates agar tidak melebihi batas gambar
+                    ymin = max(0, min(h - 1, ymin_px - pad_y))
+                    ymax = max(ymin + 1, min(h, ymax_px + pad_y))
+                    xmin = max(0, min(w - 1, xmin_px - pad_x))
+                    xmax = max(xmin + 1, min(w, xmax_px + pad_x))
                     
                     cropped_img = img[ymin:ymax, xmin:xmax]
                     
