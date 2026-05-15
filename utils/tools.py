@@ -4,6 +4,7 @@ import math
 import base64
 from datetime import datetime
 from fastmcp import FastMCP
+from fastmcp.server.context import Context
 from supabase import create_client, Client
 from typing import List, Dict, Any, Optional
 from io import BytesIO
@@ -59,12 +60,15 @@ def create_response(type: str, status: str, message: str, data: Any = None) -> d
 # --- TOOLS: ROBOT ACTION ---
 
 @mcp.tool
-def move(linear_speed: float = 0.0, angular_speed: float = 0.0, duration: float = 5.0, session_id: Optional[str] = None) -> dict:
+def move(ctx: Context, linear_speed: float = 0.0, angular_speed: float = 0.0, duration: float = 5.0) -> dict:
     """
     Memerintahkan robot untuk bergerak manual (open-loop).
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
-    t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
+    metadata = ctx.request_context.meta
+    session_id = metadata.get("session_id")
+    trace_id = metadata.get("trace_id")
+    observation_id = metadata.get("observation_id")
+    t_ctx = {"trace_id": trace_id, "parent_span_id": observation_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
@@ -104,17 +108,19 @@ def move(linear_speed: float = 0.0, angular_speed: float = 0.0, duration: float 
                 raise e
 
 @mcp.tool
-def navigate_to_waypoint(x: float, y: float, theta_deg: float = 0.0, session_id: Optional[str] = None) -> dict:
+def navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: float = 0.0) -> dict:
     """
     Mengirimkan tujuan navigasi ke stack move_base (ROS 1).
     Args:
         x: Target X position in meters (map frame)
         y: Target Y position in meters (map frame)
         theta_deg: Target orientation in degrees (0=East, 90=North, 180=West, -90=South)
-        session_id: Chat session ID (auto-injected by client)
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
-    t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
+    metadata = ctx.request_context.meta
+    session_id = metadata.get("session_id")
+    trace_id = metadata.get("trace_id")
+    observation_id = metadata.get("observation_id")
+    t_ctx = {"trace_id": trace_id, "parent_span_id": observation_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
@@ -161,13 +167,16 @@ def navigate_to_waypoint(x: float, y: float, theta_deg: float = 0.0, session_id:
                 raise e
 
 @mcp.tool
-def toggle_sit_stand(session_id: Optional[str] = None) -> dict:
+def toggle_sit_stand(ctx: Context) -> dict:
     """
     Memerintahkan robot untuk mengganti state antara duduk (sit) dan berdiri (stand).
     Perintah ini menggunakan SimpleCMD dengan kode 0x21010202.
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
-    t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
+    metadata = ctx.request_context.meta
+    session_id = metadata.get("session_id")
+    trace_id = metadata.get("trace_id")
+    observation_id = metadata.get("observation_id")
+    t_ctx = {"trace_id": trace_id, "parent_span_id": observation_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
@@ -203,7 +212,7 @@ def toggle_sit_stand(session_id: Optional[str] = None) -> dict:
                 raise e
 
 @mcp.tool
-def look_up_down(angle_value: int, duration: float = 3.0, session_id: Optional[str] = None) -> dict:
+def look_up_down(ctx: Context, angle_value: int, duration: float = 3.0) -> dict:
     """
     Memerintahkan robot untuk menunduk (look down) atau menengadah (look up) dengan mengatur pitch angle, berjalan secara asinkron.
     Args:
@@ -211,10 +220,12 @@ def look_up_down(angle_value: int, duration: float = 3.0, session_id: Optional[s
                      PENTING: Nilai di antara [-6553, 6553] adalah DEAD ZONE dan akan diabaikan (dianggap 0).
                      Gunakan nilai yang lebih besar (misal: 20000 untuk menunduk, -20000 untuk menengadah).
         duration: Lama waktu (dalam detik) robot menahan pose ini sebelum kembali normal. Default: 3.0.
-        session_id: Chat session ID (auto-injected by client)
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
-    t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
+    metadata = ctx.request_context.meta
+    session_id = metadata.get("session_id")
+    trace_id = metadata.get("trace_id")
+    observation_id = metadata.get("observation_id")
+    t_ctx = {"trace_id": trace_id, "parent_span_id": observation_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
@@ -255,7 +266,7 @@ def look_up_down(angle_value: int, duration: float = 3.0, session_id: Optional[s
 # --- TOOLS: DATABASE QUERY ---
 
 @mcp.tool
-def get_object_waypoints(query: str, location: Optional[str] = None, session_id: Optional[str] = None) -> dict:
+def get_object_waypoints(ctx: Context, query: str, location: Optional[str] = None) -> dict:
     """
     Mencari objek inspeksi dan koordinat waypoint-nya di database.
     Mengembalikan data hierarkis: Map → Location path → Object → Waypoint.
@@ -265,10 +276,12 @@ def get_object_waypoints(query: str, location: Optional[str] = None, session_id:
                Contoh: "pressure tank", "valve", "pompa".
         location: (Opsional) Filter berdasarkan nama lokasi tertentu.
                   Contoh: "Boiler Room", "Floor 1".
-        session_id: Chat session ID (auto-injected by client).
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
-    t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
+    metadata = ctx.request_context.meta
+    session_id = metadata.get("session_id")
+    trace_id = metadata.get("trace_id")
+    observation_id = metadata.get("observation_id")
+    t_ctx = {"trace_id": trace_id, "parent_span_id": observation_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
@@ -457,12 +470,15 @@ def get_object_waypoints(query: str, location: Optional[str] = None, session_id:
 # --- TOOLS: FILE RETRIEVAL (SOP) ---
 
 @mcp.tool
-def list_sop_files(session_id: Optional[str] = None) -> dict:
+def list_sop_files(ctx: Context) -> dict:
     """
     Mengambil daftar file dalam bucket Supabase 'SOP'.
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
-    t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
+    metadata = ctx.request_context.meta
+    session_id = metadata.get("session_id")
+    trace_id = metadata.get("trace_id")
+    observation_id = metadata.get("observation_id")
+    t_ctx = {"trace_id": trace_id, "parent_span_id": observation_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
@@ -512,14 +528,17 @@ def list_sop_files(session_id: Optional[str] = None) -> dict:
                 raise e
 
 @mcp.tool
-def get_sop_file(file_name: str, session_id: Optional[str] = None) -> dict:
+def get_sop_file(ctx: Context, file_name: str) -> dict:
     """
     Mengambil filepath
     args:
         file_name: Nama full file SOP yang akan diambil berdasarkan list_sop_files.
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
-    t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
+    metadata = ctx.request_context.meta
+    session_id = metadata.get("session_id")
+    trace_id = metadata.get("trace_id")
+    observation_id = metadata.get("observation_id")
+    t_ctx = {"trace_id": trace_id, "parent_span_id": observation_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
@@ -546,7 +565,7 @@ def get_sop_file(file_name: str, session_id: Optional[str] = None) -> dict:
 # --- TOOLS: CAMERA CAPTURE & UPLOAD ---
 
 @mcp.tool
-def capture_and_upload_image(session_id: Optional[str] = None, inspected_object: Optional[str] = None) -> dict:
+def capture_and_upload_image(ctx: Context, inspected_object: Optional[str] = None) -> dict:
     """
     Mengambil gambar dari kamera robot via go2rtc snapshot API.
     Jika 'inspected_object' diberikan, gambar akan diproses oleh Gemini 2.5 Pro 
@@ -555,8 +574,11 @@ def capture_and_upload_image(session_id: Optional[str] = None, inspected_object:
     Hasil gambar (asli atau hasil crop) akan diupload ke Supabase Storage bucket 
     'robotics-prata' folder 'captured', lalu dikembalikan public URL-nya.
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
-    t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
+    metadata = ctx.request_context.meta
+    session_id = metadata.get("session_id")
+    trace_id = metadata.get("trace_id")
+    observation_id = metadata.get("observation_id")
+    t_ctx = {"trace_id": trace_id, "parent_span_id": observation_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
