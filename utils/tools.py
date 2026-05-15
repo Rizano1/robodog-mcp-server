@@ -63,7 +63,7 @@ def move(linear_speed: float = 0.0, angular_speed: float = 0.0, duration: float 
     """
     Memerintahkan robot untuk bergerak manual (open-loop).
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=session_id) if session_id else None
+    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
     t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -113,7 +113,7 @@ def navigate_to_waypoint(x: float, y: float, theta_deg: float = 0.0, session_id:
         theta_deg: Target orientation in degrees (0=East, 90=North, 180=West, -90=South)
         session_id: Chat session ID (auto-injected by client)
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=session_id) if session_id else None
+    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
     t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -166,7 +166,7 @@ def toggle_sit_stand(session_id: Optional[str] = None) -> dict:
     Memerintahkan robot untuk mengganti state antara duduk (sit) dan berdiri (stand).
     Perintah ini menggunakan SimpleCMD dengan kode 0x21010202.
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=session_id) if session_id else None
+    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
     t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -213,7 +213,7 @@ def look_up_down(angle_value: int, duration: float = 3.0, session_id: Optional[s
         duration: Lama waktu (dalam detik) robot menahan pose ini sebelum kembali normal. Default: 3.0.
         session_id: Chat session ID (auto-injected by client)
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=session_id) if session_id else None
+    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
     t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -267,7 +267,7 @@ def get_object_waypoints(query: str, location: Optional[str] = None, session_id:
                   Contoh: "Boiler Room", "Floor 1".
         session_id: Chat session ID (auto-injected by client).
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=session_id) if session_id else None
+    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
     t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -461,7 +461,7 @@ def list_sop_files(session_id: Optional[str] = None) -> dict:
     """
     Mengambil daftar file dalam bucket Supabase 'SOP'.
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=session_id) if session_id else None
+    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
     t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -518,7 +518,7 @@ def get_sop_file(file_name: str, session_id: Optional[str] = None) -> dict:
     args:
         file_name: Nama full file SOP yang akan diambil berdasarkan list_sop_files.
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=session_id) if session_id else None
+    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
     t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -555,7 +555,7 @@ def capture_and_upload_image(session_id: Optional[str] = None, inspected_object:
     Hasil gambar (asli atau hasil crop) akan diupload ke Supabase Storage bucket 
     'robotics-prata' folder 'captured', lalu dikembalikan public URL-nya.
     """
-    w3c_trace_id = langfuse_client.create_trace_id(seed=session_id) if session_id else None
+    w3c_trace_id = langfuse_client.create_trace_id(seed=str(session_id)) if session_id else None
     t_ctx = {"trace_id": w3c_trace_id} if w3c_trace_id else None
 
     with langfuse_client.start_as_current_observation(
