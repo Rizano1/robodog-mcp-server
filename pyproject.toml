@@ -6,7 +6,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=2.13.1",
+    "google-genai>=2.3.0",
     "numpy>=2.2.6",
+    "opencv-python>=4.13.0.92",
+    "pydantic>=2.12.5",
     "pypdf>=6.4.0",
     "python-docx>=1.2.0",
     "supabase>=2.24.0",

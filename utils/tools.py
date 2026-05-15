@@ -10,6 +10,18 @@ from io import BytesIO
 from pypdf import PdfReader
 from dotenv import load_dotenv
 from docx import Document
+import cv2
+import numpy as np
+from google import genai
+from google.genai import types
+from pydantic import BaseModel
+
+class ObjectDetectionResult(BaseModel):
+    is_detected: bool
+    ymin: int
+    xmin: int
+    ymax: int
+    xmax: int
 
 # Import Controller ROS Noetic Anda
 from utils.ros_manager import get_controller_node 
@@ -409,11 +421,14 @@ def get_sop_file(file_name: str, session_id: Optional[str] = None) -> dict:
 # --- TOOLS: CAMERA CAPTURE & UPLOAD ---
 
 @mcp.tool
-def capture_and_upload_image(session_id: Optional[str] = None) -> dict:
+def capture_and_upload_image(session_id: Optional[str] = None, inspected_object: Optional[str] = None) -> dict:
     """
-    Mengambil gambar dari kamera robot via go2rtc snapshot API,
-    menguploadnya ke Supabase Storage bucket 'robotics-prata' folder 'captured',
-    dan mengembalikan public URL untuk diakses langsung oleh client.
+    Mengambil gambar dari kamera robot via go2rtc snapshot API.
+    Jika 'inspected_object' diberikan, gambar akan diproses oleh Gemini 2.5 Pro 
+    untuk mendeteksi objek tersebut. Jika ditemukan, gambar akan di-crop menggunakan OpenCV 
+    berdasarkan koordinat bounding box yang dikembalikan oleh model.
+    Hasil gambar (asli atau hasil crop) akan diupload ke Supabase Storage bucket 
+    'robotics-prata' folder 'captured', lalu dikembalikan public URL-nya.
     """
     controller = get_controller_node()
 
@@ -434,9 +449,52 @@ def capture_and_upload_image(session_id: Optional[str] = None) -> dict:
             message="Gagal mengambil gambar dari go2rtc snapshot API (timeout atau stream tidak tersedia)."
         )
 
+    # 1.5 Object Detection & Cropping (Opsional)
+    if inspected_object:
+        try:
+            client = genai.Client()
+            prompt = f"Detect the object: {inspected_object}. If found, set is_detected to true and provide the bounding box coordinates (ymin, xmin, ymax, xmax) in pixels. The image is provided. Make sure coordinates are within the image dimensions."
+            response = client.models.generate_content(
+                model='gemini-2.5-pro',
+                contents=[
+                    prompt,
+                    types.Part.from_bytes(data=jpeg_bytes, mime_type='image/jpeg')
+                ],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=ObjectDetectionResult,
+                    temperature=0.0,
+                ),
+            )
+            
+            result = response.parsed
+            
+            if result and result.is_detected:
+                # Convert bytes to numpy array
+                nparr = np.frombuffer(jpeg_bytes, np.uint8)
+                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                
+                if img is not None:
+                    h, w = img.shape[:2]
+                    # Clamp coordinates to valid image size
+                    ymin = max(0, min(h - 1, result.ymin))
+                    ymax = max(ymin + 1, min(h, result.ymax))
+                    xmin = max(0, min(w - 1, result.xmin))
+                    xmax = max(xmin + 1, min(w, result.xmax))
+                    
+                    cropped_img = img[ymin:ymax, xmin:xmax]
+                    
+                    # Encode back to JPEG
+                    success, buffer = cv2.imencode('.jpg', cropped_img)
+                    if success:
+                        jpeg_bytes = buffer.tobytes()
+        except Exception as e:
+            print(f"Error during Gemini detection or cropping: {e}")
+            # Lanjutkan dengan gambar original jika terjadi error
+
     # 2. Generate nama file dengan timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filepath = f"captured/capture_{timestamp}.jpg"
+    filepath = f"captured/capture_{timestamp}_{session_id}.jpg"
 
     try:
         # 3. Upload ke Supabase Storage
