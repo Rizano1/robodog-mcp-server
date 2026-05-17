@@ -169,9 +169,6 @@ class TurtleBotController:
         self.simple_cmd_pub.publish(msg)
         rospy.loginfo(f"Published SimpleCMD: code={hex(cmd_code)}, value={cmd_value}, type={cmd_type}")
         
-        if session_id:
-            report_msg = f"✅ [ROBOT] Command terkirim (code: {hex(cmd_code)}, value: {cmd_value})"
-            self._report_event(session_id, report_msg)
             
         return True
 

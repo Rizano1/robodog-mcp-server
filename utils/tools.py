@@ -18,7 +18,10 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel
 from langfuse import observe, propagate_attributes, get_client
+# Import Controller ROS Noetic Anda
+from utils.ros_manager import get_controller_node 
 
+load_dotenv()
 langfuse_client = get_client()
 
 class ObjectDetectionResult(BaseModel):
@@ -27,11 +30,6 @@ class ObjectDetectionResult(BaseModel):
     xmin: int
     ymax: int
     xmax: int
-
-# Import Controller ROS Noetic Anda
-from utils.ros_manager import get_controller_node 
-
-load_dotenv()
 
 mcp = FastMCP("robot_api_mcp")
 
