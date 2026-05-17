@@ -106,7 +106,7 @@ def async_move(ctx: Context, linear_speed: float = 0.0, angular_speed: float = 0
                 raise e
 
 @mcp.tool
-def async_navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: float = 0.0) -> dict:
+def async_navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: float) -> dict:
     """
     Mengirimkan tujuan navigasi ke stack move_base (ROS 1).
     Args:
