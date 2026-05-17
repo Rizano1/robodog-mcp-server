@@ -93,7 +93,7 @@ def move(ctx: Context, linear_speed: float = 0.0, angular_speed: float = 0.0, du
                 result = create_response(
                     type="robot_action",
                     status="running",
-                    message=f"Perintah dikirim. Robot sedang bergerak: Linear={linear_speed}m/s, Angular={angular_speed}rad/s.",
+                    message=f"Perintah dikirim. Robot sedang bergerak: Linear={linear_speed}m/s, Angular={angular_speed}rad/s. Jangan lakukan perintah apapun hingga robot selesai bergerak.",
                     data={
                         "linear_speed": linear_speed,
                         "angular_speed": angular_speed,
@@ -149,7 +149,7 @@ def navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: float = 0.
                     result = create_response(
                         type="robot_action",
                         status="running",
-                        message=f"Perintah dikirim. Robot sedang menuju ({x:.2f}, {y:.2f}) arah {theta_deg:.0f}°.",
+                        message=f"Perintah dikirim. Robot sedang menuju ({x:.2f}, {y:.2f}) arah {theta_deg:.0f}°. Jangan lakukan perintah apapun hingga robot selesai bergerak.",
                         data={"target_x": x, "target_y": y, "target_theta_deg": theta_deg}
                     )
                 else:
