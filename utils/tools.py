@@ -58,7 +58,7 @@ def create_response(type: str, status: str, message: str, data: Any = None) -> d
 # --- TOOLS: ROBOT ACTION ---
 
 @mcp.tool
-def move(ctx: Context, linear_speed: float = 0.0, angular_speed: float = 0.0, duration: float = 5.0) -> dict:
+def async_move(ctx: Context, linear_speed: float = 0.0, angular_speed: float = 0.0, duration: float = 5.0) -> dict:
     """
     Memerintahkan robot untuk bergerak manual (open-loop).
     """
@@ -106,7 +106,7 @@ def move(ctx: Context, linear_speed: float = 0.0, angular_speed: float = 0.0, du
                 raise e
 
 @mcp.tool
-def navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: float = 0.0) -> dict:
+def async_navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: float = 0.0) -> dict:
     """
     Mengirimkan tujuan navigasi ke stack move_base (ROS 1).
     Args:
