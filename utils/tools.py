@@ -201,7 +201,7 @@ def toggle_sit_stand(ctx: Context) -> dict:
                 result = create_response(
                     type="robot_action",
                     status="success",
-                    message="Perintah Sit/Stand berhasil dikirim.",
+                    message="Robot berhasil diganti state antara duduk dan berdiri.",
                     data={"cmd_code": "0x21010202"}
                 )
                 span.update(output=result)
@@ -613,7 +613,7 @@ def capture_and_upload_image(ctx: Context, inspected_object: Optional[str] = Non
                 if inspected_object:
                     try:
                         client = genai.Client()
-                        prompt = f"Detect the object: {inspected_object}. If found, set is_detected to true and provide the bounding box coordinates (ymin, xmin, ymax, xmax) as normalized integers between 0 and 1000, where 0 is top/left and 1000 is bottom/right."
+                        prompt = f"Tolong deteksi objek: {inspected_object} apakah ada atau tidak pada gambar yang diberikan. jika ada, set is_detected ke true dan  berikan bounding box coordinates (ymin, xmin, ymax, xmax) sebagai normalized integers antara 0 dan 1000, dimana 0 adalah bagian atas/kiri dan 1000 adalah bagian bawah/kanan."
                         response = client.models.generate_content(
                             model='gemini-2.5-pro',
                             contents=[
