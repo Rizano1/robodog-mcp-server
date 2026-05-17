@@ -80,7 +80,7 @@ class TurtleBotController:
 
         # --- LAPOR KE WEBHOOK (REUSABLE) ---
         report_msg = (
-            f"✅ [ROBOT] Gerakan manual selesai. "
+            f"✅ [ROBOT_FEEDBACK] Gerakan manual selesai. "
             f"(Maju: {linear_speed}m/s, Putar: {angular_speed}rad/s, Durasi: {duration}s)"
         )
         self._report_event(session_id, report_msg)
@@ -113,9 +113,9 @@ class TurtleBotController:
             is_success = (status == 3)
             
             if is_success:
-                msg_text = f"✅ [ROBOT] Sampai di titik navigasi ({x}, {y})."
+                msg_text = f"✅ [ROBOT_FEEDBACK] Sampai di titik navigasi ({x}, {y})."
             else:
-                msg_text = f"⚠️ [ROBOT] Gagal mencapai titik ({x}, {y}). Ada halangan atau path invalid."
+                msg_text = f"⚠️ [ROBOT_FEEDBACK] Gagal mencapai titik ({x}, {y}). Ada halangan atau path invalid."
             
             rospy.loginfo(msg_text)
             # --- LAPOR KE WEBHOOK (REUSABLE) ---
@@ -205,5 +205,5 @@ class TurtleBotController:
         self.send_simple_cmd(cmd_code=0x21010D06)
 
         # 4. Lapor ke Webhook
-        report_msg = f"✅ [ROBOT] Pose Look Up/Down ({pitch_angle}) selama {duration} detik selesai."
+        report_msg = f"✅ [ROBOT_FEEDBACK] Pose Look Up/Down ({pitch_angle}) selama {duration} detik selesai."
         self._report_event(session_id, report_msg)
