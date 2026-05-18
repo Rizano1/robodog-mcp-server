@@ -201,7 +201,7 @@ def toggle_sit_stand(ctx: Context) -> dict:
                 result = create_response(
                     type="robot_action",
                     status="success",
-                    message="Robot berhasil diganti state antara duduk dan berdiri.",
+                    message="Robot sudah dalam posisi duduk/berdiri.",
                     data={"cmd_code": "0x21010202"}
                 )
                 span.update(output=result)
