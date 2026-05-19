@@ -690,8 +690,8 @@ def capture_and_inspect_image(ctx: Context, inspected_object: Optional[str] = No
                                 xmax_px = int((result_gemini.xmax / 1000.0) * w)
                                 
                                 # Tambahkan 10% padding agar objek tidak terpotong terlalu mepet
-                                pad_y = int((ymax_px - ymin_px) * 0.1)
-                                pad_x = int((xmax_px - xmin_px) * 0.1)
+                                pad_y = int((ymax_px - ymin_px) * 0.2)
+                                pad_x = int((xmax_px - xmin_px) * 0.2)
                                 
                                 # Clamp coordinates agar tidak melebihi batas gambar
                                 ymin = max(0, min(h - 1, ymin_px - pad_y))
