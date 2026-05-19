@@ -253,7 +253,7 @@ def look_up_down(ctx: Context, angle_value: int, duration: float = 3.0) -> dict:
                 result = create_response(
                     type="robot_action",
                     status="success",
-                    message=f"Perintah Look Up/Down ({clamped_value}) dikirim. Robot akan menahan pose selama {duration} detik.",
+                    message=f"Robot sedang look up/down sesuai perintah, dan akan menahan pose selama {duration} detik.",
                     data={"cmd_code": "pose_async", "cmd_value": clamped_value, "duration": duration}
                 )
                 span.update(output=result)

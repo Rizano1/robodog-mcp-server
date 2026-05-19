@@ -205,5 +205,5 @@ class TurtleBotController:
         self.send_simple_cmd(cmd_code=0x21010D06)
 
         # 4. Lapor ke Webhook
-        report_msg = f"✅ [ROBOT_FEEDBACK] Pose Look Up/Down ({pitch_angle}) selama {duration} detik selesai."
-        self._report_event(session_id, report_msg)
+        # report_msg = f"✅ [ROBOT_FEEDBACK] Pose Look Up/Down ({pitch_angle}) selama {duration} detik selesai."
+        # self._report_event(session_id, report_msg)
