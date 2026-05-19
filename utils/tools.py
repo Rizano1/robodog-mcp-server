@@ -31,6 +31,16 @@ class ObjectDetectionResult(BaseModel):
     ymax: int
     xmax: int
 
+class InspectionResult(BaseModel):
+    is_detected: bool
+    ymin: int
+    xmin: int
+    ymax: int
+    xmax: int
+    analysis: str
+    findings: list[str]
+    status: str  # "normal", "abnormal", "inconclusive"
+
 mcp = FastMCP("robot_api_mcp")
 
 # --- Konfigurasi Supabase ---
@@ -563,14 +573,17 @@ def get_sop_file(ctx: Context, file_name: str) -> dict:
 # --- TOOLS: CAMERA CAPTURE & UPLOAD ---
 
 @mcp.tool
-def capture_and_upload_image(ctx: Context, inspected_object: Optional[str] = None) -> dict:
+def capture_and_inspect_image(ctx: Context, inspected_object: Optional[str] = None, sop_context: Optional[str] = None) -> dict:
     """
     Mengambil gambar dari kamera robot via go2rtc snapshot API.
-    Jika 'inspected_object' diberikan, gambar akan diproses oleh Gemini 2.5 Pro 
+    Jika 'inspected_object' diberikan, gambar akan diproses oleh Gemini 
     untuk mendeteksi objek tersebut. Jika ditemukan, gambar akan di-crop menggunakan OpenCV 
     berdasarkan koordinat bounding box yang dikembalikan oleh model.
+    Jika 'sop_context' juga diberikan, Gemini akan melakukan analisis visual terhadap
+    objek berdasarkan prosedur SOP yang diberikan dan mengembalikan temuan inspeksinya.
+    Berikan point penting dari sop dengan jelas, ringkas, dan mudah dipahami.
     Hasil gambar (asli atau hasil crop) akan diupload ke Supabase Storage bucket 
-    'robotics-prata' folder 'captured', lalu dikembalikan public URL-nya.
+    'robotics-prata' folder 'captured', lalu dikembalikan public URL-nya beserta hasil analisis.
     """
     metadata = ctx.request_context.meta
     session_id = metadata.session_id
@@ -580,9 +593,9 @@ def capture_and_upload_image(ctx: Context, inspected_object: Optional[str] = Non
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
-        name="mcp-tool: capture_and_upload_image",
+        name="mcp-tool: capture_and_inspect_image",
         trace_context=t_ctx,
-        input={"inspected_object": inspected_object}
+        input={"inspected_object": inspected_object, "sop_context": sop_context}
     ) as span:
         with propagate_attributes(tags=["mcp-server"]):
             try:
@@ -609,11 +622,36 @@ def capture_and_upload_image(ctx: Context, inspected_object: Optional[str] = Non
                     span.update(output=result)
                     return result
 
-                # 1.5 Object Detection & Cropping (Opsional)
+                # 1.5 Object Detection, Cropping & SOP Analysis (Opsional)
+                analysis_data = None
                 if inspected_object:
                     try:
                         client = genai.Client()
-                        prompt = f"Tolong deteksi objek: {inspected_object} apakah ada atau tidak pada gambar yang diberikan. jika ada, set is_detected ke true dan  berikan bounding box coordinates (ymin, xmin, ymax, xmax) sebagai normalized integers antara 0 dan 1000, dimana 0 adalah bagian atas/kiri dan 1000 adalah bagian bawah/kanan."
+
+                        # Pilih schema dan prompt berdasarkan ada/tidaknya SOP
+                        if sop_context:
+                            prompt = (
+                                f"Kamu adalah inspektur visual profesional.\n"
+                                f"1. Deteksi objek: '{inspected_object}' pada gambar. "
+                                f"Jika ada, set is_detected=true dan berikan bounding box (ymin, xmin, ymax, xmax) "
+                                f"sebagai normalized integers 0-1000 (0=atas/kiri, 1000=bawah/kanan).\n"
+                                f"2. Analisis kondisi visual objek berdasarkan SOP berikut:\n"
+                                f"--- SOP START ---\n{sop_context}\n--- SOP END ---\n"
+                                f"3. Di field 'analysis', berikan analisis detail kondisi objek berdasarkan poin-poin SOP.\n"
+                                f"4. Di field 'findings', list temuan spesifik (baik normal maupun abnormal).\n"
+                                f"5. Di field 'status', set 'normal' jika semua sesuai SOP, 'abnormal' jika ada ketidaksesuaian, "
+                                f"atau 'inconclusive' jika gambar kurang jelas untuk menilai."
+                            )
+                            schema = InspectionResult
+                        else:
+                            prompt = (
+                                f"Tolong deteksi objek: {inspected_object} apakah ada atau tidak pada gambar. "
+                                f"Jika ada, set is_detected ke true dan berikan bounding box coordinates "
+                                f"(ymin, xmin, ymax, xmax) sebagai normalized integers antara 0 dan 1000, "
+                                f"dimana 0 adalah bagian atas/kiri dan 1000 adalah bagian bawah/kanan."
+                            )
+                            schema = ObjectDetectionResult
+
                         response = client.models.generate_content(
                             model='gemini-2.5-pro',
                             contents=[
@@ -622,12 +660,20 @@ def capture_and_upload_image(ctx: Context, inspected_object: Optional[str] = Non
                             ],
                             config=types.GenerateContentConfig(
                                 response_mime_type="application/json",
-                                response_schema=ObjectDetectionResult,
+                                response_schema=schema,
                                 temperature=0.0,
                             ),
                         )
                         
                         result_gemini = response.parsed
+
+                        # Simpan hasil analisis SOP jika ada
+                        if sop_context and isinstance(result_gemini, InspectionResult):
+                            analysis_data = {
+                                "analysis": result_gemini.analysis,
+                                "findings": result_gemini.findings,
+                                "inspection_status": result_gemini.status,
+                            }
                         
                         if result_gemini and result_gemini.is_detected:
                             # Convert bytes to numpy array
@@ -660,7 +706,7 @@ def capture_and_upload_image(ctx: Context, inspected_object: Optional[str] = Non
                                 if success:
                                     jpeg_bytes = buffer.tobytes()
                     except Exception as e:
-                        print(f"Error during Gemini detection or cropping: {e}")
+                        print(f"Error during Gemini detection/inspection: {e}")
                         # Lanjutkan dengan gambar original jika terjadi error
 
                 # 2. Generate nama file dengan timestamp
@@ -677,14 +723,20 @@ def capture_and_upload_image(ctx: Context, inspected_object: Optional[str] = Non
                 # 4. Buat public URL
                 public_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{filepath}"
 
+                response_data = {
+                    "filepath": filepath,
+                    "public_url": public_url
+                }
+                if analysis_data:
+                    response_data["inspection"] = analysis_data
+
+                msg = "Gambar berhasil diambil, diupload, dan dianalisis berdasarkan SOP." if analysis_data else "Gambar berhasil diambil dan diupload."
+
                 result = create_response(
                     type="image_capture",
                     status="success",
-                    message=f"Gambar berhasil diambil dan diupload.",
-                    data={
-                        "filepath": filepath,
-                        "public_url": public_url
-                    }
+                    message=msg,
+                    data=response_data
                 )
                 span.update(output=result)
                 return result
