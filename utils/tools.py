@@ -581,7 +581,7 @@ def capture_and_inspect_image(ctx: Context, inspected_object: Optional[str] = No
     berdasarkan koordinat bounding box yang dikembalikan oleh model.
     Jika 'sop_context' juga diberikan, Gemini akan melakukan analisis visual terhadap
     objek berdasarkan prosedur SOP yang diberikan dan mengembalikan temuan inspeksinya.
-    Berikan point penting dari sop dengan jelas, ringkas, dan mudah dipahami.
+    Berikan point penting dari sop dengan jelas, ringkas, dan tidak ada perubahan dengan sop aslinya.
     Hasil gambar (asli atau hasil crop) akan diupload ke Supabase Storage bucket 
     'robotics-prata' folder 'captured', lalu dikembalikan public URL-nya beserta hasil analisis.
     """
@@ -653,7 +653,7 @@ def capture_and_inspect_image(ctx: Context, inspected_object: Optional[str] = No
                             schema = ObjectDetectionResult
 
                         response = client.models.generate_content(
-                            model='gemini-2.5-pro',
+                            model='gemini-3.1-pro-preview',
                             contents=[
                                 prompt,
                                 types.Part.from_bytes(data=jpeg_bytes, mime_type='image/jpeg')
