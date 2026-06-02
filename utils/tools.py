@@ -220,6 +220,52 @@ def toggle_sit_stand(ctx: Context) -> dict:
                 raise e
 
 @mcp.tool
+def say_hello(ctx: Context) -> dict:
+    """
+    Memerintahkan robot untuk melakukan aksi 'Hello' (melambaikan tangan).
+    Robot HARUS dalam keadaan duduk (sitting state) agar perintah ini bisa dieksekusi.
+    Perintah ini menggunakan SimpleCMD dengan kode 0x21010507.
+    """
+    metadata = ctx.request_context.meta
+    session_id = metadata.session_id
+    trace_id = metadata.trace_id
+    parent_span_id = metadata.observation_id
+    t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+
+    with langfuse_client.start_as_current_observation(
+        as_type="span",
+        name="mcp-tool: say_hello",
+        trace_context=t_ctx,
+        input={}
+    ) as span:
+        with propagate_attributes(tags=["mcp-server"]):
+            try:
+                controller = get_controller_node()
+
+                if controller is None:
+                    result = create_response(
+                        type="robot_action",
+                        status="error",
+                        message="Controller ROS Noetic tidak tersedia."
+                    )
+                    span.update(output=result)
+                    return result
+
+                # 0x21010507 adalah command untuk aksi Hello (lambaikan tangan)
+                controller.send_simple_cmd(cmd_code=0x21010507, cmd_value=0, cmd_type=0, session_id=session_id)
+
+                result = create_response(
+                    type="robot_action",
+                    status="success",
+                    message="Robot sedang melakukan aksi Hello (melambaikan tangan). Pastikan robot dalam keadaan duduk (sitting state).",
+                    data={"cmd_code": "0x21010507"}
+                )
+                span.update(output=result)
+                return result
+            except Exception as e:
+                raise e
+
+@mcp.tool
 def look_up_down(ctx: Context, angle_value: int, duration: float = 3.0) -> dict:
     """
     Memerintahkan robot untuk menunduk (look down) atau menengadah (look up) dengan mengatur pitch angle, berjalan secara asinkron.
