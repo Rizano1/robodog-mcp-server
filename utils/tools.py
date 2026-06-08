@@ -76,6 +76,7 @@ def async_move(ctx: Context, linear_speed: float = 0.0, angular_speed: float = 0
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     observation_id = metadata.observation_id
+    model_name = getattr(metadata, 'model_name', None)
     t_ctx = {"trace_id": trace_id, "parent_span_id": observation_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -98,7 +99,7 @@ def async_move(ctx: Context, linear_speed: float = 0.0, angular_speed: float = 0
                     return result
 
                 # Memanggil metode async pada controller Noetic
-                controller.move_async(linear_speed, angular_speed, duration, session_id)
+                controller.move_async(linear_speed, angular_speed, duration, session_id, model_name)
                 
                 result = create_response(
                     type="robot_action",
@@ -128,6 +129,7 @@ def async_navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: floa
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
+    model_name = getattr(metadata, 'model_name', None)
     t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -153,7 +155,7 @@ def async_navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: floa
                 theta_rad = math.radians(theta_deg)
 
                 # Mengirim goal ke Action Server move_base
-                goal_sent = controller.send_nav_goal_async(x, y, theta_rad, session_id)
+                goal_sent = controller.send_nav_goal_async(x, y, theta_rad, session_id, model_name)
                 
                 if goal_sent:
                     result = create_response(
@@ -184,6 +186,7 @@ def toggle_sit_stand(ctx: Context) -> dict:
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
+    model_name = getattr(metadata, 'model_name', None)
     t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -230,6 +233,7 @@ def say_hello(ctx: Context) -> dict:
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
+    model_name = getattr(metadata, 'model_name', None)
     t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -279,6 +283,7 @@ def look_up_down(ctx: Context, angle_value: int, duration: float = 3.0) -> dict:
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
+    model_name = getattr(metadata, 'model_name', None)
     t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -304,7 +309,7 @@ def look_up_down(ctx: Context, angle_value: int, duration: float = 3.0) -> dict:
                 clamped_value = max(-32767, min(32767, angle_value))
                 
                 # Gunakan pose_async yang baru kita buat
-                controller.pose_async(pitch_angle=clamped_value, duration=duration, session_id=session_id)
+                controller.pose_async(pitch_angle=clamped_value, duration=duration, session_id=session_id, model_name=model_name)
 
                 result = create_response(
                     type="robot_action",
@@ -335,6 +340,7 @@ def get_object_waypoints(ctx: Context, query: str, location: Optional[str] = Non
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
+    model_name = getattr(metadata, 'model_name', None)
     t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -532,6 +538,7 @@ def list_sop_files(ctx: Context) -> dict:
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
+    model_name = getattr(metadata, 'model_name', None)
     t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -592,6 +599,7 @@ def get_sop_file(ctx: Context, file_name: str) -> dict:
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
+    model_name = getattr(metadata, 'model_name', None)
     t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(
@@ -635,6 +643,7 @@ def capture_and_inspect_image(ctx: Context, inspected_object: Optional[str] = No
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
+    model_name = getattr(metadata, 'model_name', None)
     t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
 
     with langfuse_client.start_as_current_observation(

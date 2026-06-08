@@ -24,10 +24,11 @@ class TurtleBotController:
         rospy.loginfo("TurtleBotController initialized.")
 
     # --- HELPER METHOD: REUSABLE WEBHOOK REPORTER ---
-    def _report_event(self, session_id: str, message: str):
+    def _report_event(self, session_id: str, message: str, model_name: str = None):
         """
         Fungsi reusable untuk mengirim laporan ke FastAPI Webhook.
         Bisa dipakai oleh move, navigate, arm_control, dll.
+        Menyertakan model_name agar webhook melanjutkan dengan model yang sama.
         """
         if not session_id:
             rospy.logwarn(f"Event finished but no session_id provided. Msg: {message}")
@@ -40,6 +41,8 @@ class TurtleBotController:
                 "session_id": int(session_id),
                 "user_prompt": message,
             }
+            if model_name:
+                payload["model_name"] = model_name
             # Timeout pendek agar tidak memblokir thread robot jika API down
             resp = requests.post(API_CALLBACK_URL, json=payload, timeout=5.0)
             rospy.loginfo(f"📡 Webhook response: {resp.status_code}")
@@ -48,17 +51,17 @@ class TurtleBotController:
 
     # --- 1. MANUAL MOVE (OPEN LOOP) ---
 
-    def move_async(self, linear_speed: float, angular_speed: float, duration: float, session_id: str = None):
+    def move_async(self, linear_speed: float, angular_speed: float, duration: float, session_id: str = None, model_name: str = None):
         """
-        Gerak manual. Menerima session_id untuk lapor setelah selesai.
+        Gerak manual. Menerima session_id dan model_name untuk lapor setelah selesai.
         """
         Thread(
             target=self._move_blocking, 
-            args=(linear_speed, angular_speed, duration, session_id), 
+            args=(linear_speed, angular_speed, duration, session_id, model_name), 
             daemon=True
         ).start()
 
-    def _move_blocking(self, linear_speed: float, angular_speed: float, duration: float, session_id: str):
+    def _move_blocking(self, linear_speed: float, angular_speed: float, duration: float, session_id: str, model_name: str = None):
         """
         Logic gerak manual + Lapor Webhook di akhir.
         """
@@ -83,11 +86,11 @@ class TurtleBotController:
             f"✅ [ROBOT_FEEDBACK] Gerakan manual selesai. "
             f"(Maju: {linear_speed}m/s, Putar: {angular_speed}rad/s, Durasi: {duration}s)"
         )
-        self._report_event(session_id, report_msg)
+        self._report_event(session_id, report_msg, model_name)
 
     # --- 2. NAVIGATION (PATH PLANNING) ---
 
-    def send_nav_goal_async(self, x: float, y: float, theta: float, session_id: str = None) -> bool:
+    def send_nav_goal_async(self, x: float, y: float, theta: float, session_id: str = None, model_name: str = None) -> bool:
         if not self._action_client.wait_for_server(timeout=rospy.Duration(5.0)):
             rospy.logerr("move_base action server not available!")
             return False
@@ -119,7 +122,7 @@ class TurtleBotController:
             
             rospy.loginfo(msg_text)
             # --- LAPOR KE WEBHOOK (REUSABLE) ---
-            self._report_event(session_id, msg_text)
+            self._report_event(session_id, msg_text, model_name)
 
         self._action_client.send_goal(goal, done_cb=done_callback)
         return True
@@ -172,17 +175,17 @@ class TurtleBotController:
             
         return True
 
-    def pose_async(self, pitch_angle: int, duration: float = 3.0, session_id: str = None):
+    def pose_async(self, pitch_angle: int, duration: float = 3.0, session_id: str = None, model_name: str = None):
         """
         Mengubah robot ke Pose Mode dan menahan pitch angle selama durasi tertentu.
         """
         Thread(
             target=self._pose_blocking,
-            args=(pitch_angle, duration, session_id),
+            args=(pitch_angle, duration, session_id, model_name),
             daemon=True
         ).start()
 
-    def _pose_blocking(self, pitch_angle: int, duration: float, session_id: str):
+    def _pose_blocking(self, pitch_angle: int, duration: float, session_id: str, model_name: str = None):
         """
         Logic menahan pose: Set Pose Mode -> Loop kirim command -> Set Move Mode
         """
@@ -206,4 +209,4 @@ class TurtleBotController:
 
         # 4. Lapor ke Webhook
         # report_msg = f"✅ [ROBOT_FEEDBACK] Pose Look Up/Down ({pitch_angle}) selama {duration} detik selesai."
-        # self._report_event(session_id, report_msg)
+        # self._report_event(session_id, report_msg, model_name)
