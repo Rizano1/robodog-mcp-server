@@ -8,9 +8,7 @@ from fastmcp.server.context import Context
 from supabase import create_client, Client
 from typing import List, Dict, Any, Optional
 from io import BytesIO
-from pypdf import PdfReader
 from dotenv import load_dotenv
-from docx import Document
 import cv2
 import numpy as np
 import httpx
@@ -49,7 +47,13 @@ SUPABASE_KEY: str = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 BUCKET_NAME = "robotics-prata"       
-FOLDER_NAME = "sop"   
+FOLDER_NAME = "sop"
+
+# --- Konfigurasi Model Routing untuk Vision ---
+OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY")
+OLLAMA_MODELS = {"qwen3.5:27b"}
+OPENAI_MODELS = {"gpt-4o", "gpt-4o-mini"}
 
 
 # --- Helper Function untuk Format Standar ---
