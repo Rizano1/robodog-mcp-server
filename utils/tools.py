@@ -46,8 +46,7 @@ SUPABASE_URL: str = os.getenv("SUPABASE_URL")
 SUPABASE_KEY: str = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-BUCKET_NAME = "robotics-prata"       
-FOLDER_NAME = "sop"
+BUCKET_NAME = "robotics-prata"
 
 # --- Konfigurasi Model Routing untuk Vision ---
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -230,7 +229,6 @@ def toggle_sit_stand(ctx: Context) -> dict:
 def say_hello(ctx: Context) -> dict:
     """
     Memerintahkan robot untuk melakukan aksi 'Hello' (melambaikan tangan).
-    Robot HARUS dalam keadaan duduk (sitting state) agar perintah ini bisa dieksekusi.
     Perintah ini menggunakan SimpleCMD dengan kode 0x21010507.
     """
     metadata = ctx.request_context.meta
@@ -534,70 +532,14 @@ def get_object_waypoints(ctx: Context, query: str, location: Optional[str] = Non
 # --- TOOLS: FILE RETRIEVAL (SOP) ---
 
 @mcp.tool
-def list_sop_files(ctx: Context) -> dict:
+def get_sop_file(ctx: Context, query: str) -> dict:
     """
-    Mengambil daftar file dalam bucket Supabase 'SOP'.
-    """
-    metadata = ctx.request_context.meta
-    session_id = metadata.session_id
-    trace_id = metadata.trace_id
-    parent_span_id = metadata.observation_id
-    model_name = getattr(metadata, 'model_name', None)
-    t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    Mencari dan mengambil file SOP berdasarkan nama objek atau keywords dari database.
+    Tool ini mencari di tabel 'objects' dan mengembalikan sop_url yang terkait.
 
-    with langfuse_client.start_as_current_observation(
-        as_type="span",
-        name="mcp-tool: list_sop_files",
-        trace_context=t_ctx,
-        input={}
-    ) as span:
-        with propagate_attributes(tags=["mcp-server"]):
-            try:
-                result_supabase = supabase.storage.from_(BUCKET_NAME).list(
-                    FOLDER_NAME,
-                    {
-                        "limit": 200,
-                        "offset": 0,
-                        "sortBy": {"column": "name", "order": "asc"},
-                    }
-                )
-                
-                if isinstance(result_supabase, list):
-                    file_names = [f["name"] for f in result_supabase]
-                    result = create_response(
-                        type="file_list",
-                        status="success",
-                        message=f"Ditemukan {len(file_names)} file SOP.",
-                        data=file_names
-                    )
-                else:
-                    result = create_response(
-                        type="file_list",
-                        status="error",
-                        message="Format respon dari storage tidak dikenali.",
-                        data=str(result_supabase)
-                    )
-                
-                span.update(output=result)
-                return result
-                    
-            except Exception as e:
-                result = create_response(
-                    type="file_list",
-                    status="error",
-                    message=f"Gagal mengambil list file: {str(e)}"
-                )
-                span.update(output=result)
-                return result
-            except Exception as e:
-                raise e
-
-@mcp.tool
-def get_sop_file(ctx: Context, file_name: str) -> dict:
-    """
-    Mengambil filepath
-    args:
-        file_name: Nama full file SOP yang akan diambil berdasarkan list_sop_files.
+    Args:
+        query: Kata kunci pencarian (nama objek atau keyword).
+               Contoh: "pressure tank", "valve", "pompa".
     """
     metadata = ctx.request_context.meta
     session_id = metadata.session_id
@@ -610,23 +552,58 @@ def get_sop_file(ctx: Context, file_name: str) -> dict:
         as_type="span",
         name="mcp-tool: get_sop_file",
         trace_context=t_ctx,
-        input={"file_name": file_name}
+        input={"query": query}
     ) as span:
         with propagate_attributes(tags=["mcp-server"]):
             try:
+                search_term = f"%{query}%"
+
+                # Search objects by name & keywords
+                obj_response = supabase.table("objects").select(
+                    "id, name, keywords, sop_url"
+                ).or_(
+                    f"name.ilike.{search_term},keywords.cs.{{{query}}}"
+                ).execute()
+
+                objects = obj_response.data or []
+
+                if not objects:
+                    result = create_response(
+                        type="sop_query",
+                        status="empty",
+                        message=f"Tidak ditemukan objek/SOP dengan kata kunci '{query}'.",
+                        data=[]
+                    )
+                    span.update(output=result)
+                    return result
+
+                # Format results
+                formatted = []
+                for obj in objects:
+                    formatted.append({
+                        "object_id": obj.get("id"),
+                        "name": obj.get("name"),
+                        "keywords": obj.get("keywords", []),
+                        "sop_url": obj.get("sop_url"),
+                    })
+
                 result = create_response(
-                    type="file_retrieve",
+                    type="sop_query",
                     status="success",
-                    message=f"File '{file_name}' berhasil diambil.",
-                    data={
-                        "filename": file_name,
-                        "folder": FOLDER_NAME,
-                    }
+                    message=f"Ditemukan {len(formatted)} SOP yang cocok untuk '{query}'.",
+                    data=formatted
                 )
                 span.update(output=result)
                 return result
+
             except Exception as e:
-                raise e
+                result = create_response(
+                    type="sop_query",
+                    status="error",
+                    message=f"Terjadi kesalahan saat query database: {str(e)}"
+                )
+                span.update(output=result)
+                return result
 
 # --- TOOLS: CAMERA CAPTURE & UPLOAD ---
 
