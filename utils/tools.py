@@ -1,43 +1,15 @@
 import os
-import io
 import math
-import base64
-from datetime import datetime
 from fastmcp import FastMCP
 from fastmcp.server.context import Context
 from supabase import create_client, Client
 from typing import List, Dict, Any, Optional
-from io import BytesIO
 from dotenv import load_dotenv
-import cv2
-import numpy as np
-import httpx
-from google import genai
-from google.genai import types
-from pydantic import BaseModel
 from langfuse import observe, propagate_attributes, get_client
-# Import Controller ROS Noetic Anda
 from utils.ros_manager import get_controller_node 
 
 load_dotenv()
 langfuse_client = get_client()
-
-class ObjectDetectionResult(BaseModel):
-    is_detected: bool
-    ymin: int
-    xmin: int
-    ymax: int
-    xmax: int
-
-class InspectionResult(BaseModel):
-    is_detected: bool
-    ymin: int
-    xmin: int
-    ymax: int
-    xmax: int
-    analysis: str
-    findings: list[str]
-    status: str  # "normal", "abnormal", "inconclusive"
 
 mcp = FastMCP("robot_api_mcp")
 
@@ -47,13 +19,6 @@ SUPABASE_KEY: str = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 BUCKET_NAME = "robotics-prata"
-
-# --- Konfigurasi Model Routing untuk Vision ---
-OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY")
-OLLAMA_MODELS = {"qwen3.5:27b"}
-OPENAI_MODELS = {"gpt-4o", "gpt-4o-mini"}
-
 
 # --- Helper Function untuk Format Standar ---
 def create_response(type: str, status: str, message: str, data: Any = None) -> dict:
@@ -96,12 +61,12 @@ def async_move(ctx: Context, linear_speed: float = 0.0, angular_speed: float = 0
                     result = create_response(
                         type="robot_action",
                         status="error",
-                        message="Controller ROS Noetic belum siap atau roscore tidak terdeteksi."
+                        message="Controller ROS 2 belum siap."
                     )
                     span.update(output=result)
                     return result
 
-                # Memanggil metode async pada controller Noetic
+                # Memanggil metode async pada controller ROS 2
                 controller.move_async(linear_speed, angular_speed, duration, session_id, model_name)
                 
                 result = create_response(
@@ -122,7 +87,7 @@ def async_move(ctx: Context, linear_speed: float = 0.0, angular_speed: float = 0
 @mcp.tool
 def async_navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: float) -> dict:
     """
-    Mengirimkan tujuan navigasi ke stack move_base (ROS 1).
+    Mengirimkan tujuan navigasi ke stack Nav2 (ROS 2).
     Args:
         x: Target X position in meters (map frame)
         y: Target Y position in meters (map frame)
@@ -149,15 +114,15 @@ def async_navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: floa
                     result = create_response(
                         type="robot_action",
                         status="error",
-                        message="Controller ROS Noetic tidak tersedia."
+                        message="Controller ROS 2 tidak tersedia."
                     )
                     span.update(output=result)
                     return result
 
-                # Convert degrees to radians for move_base
+                # Convert degrees to radians for Nav2
                 theta_rad = math.radians(theta_deg)
 
-                # Mengirim goal ke Action Server move_base
+                # Mengirim goal ke Action Server Nav2
                 goal_sent = controller.send_nav_goal_async(x, y, theta_rad, session_id, model_name)
                 
                 if goal_sent:
@@ -171,154 +136,9 @@ def async_navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: floa
                     result = create_response(
                         type="robot_action",
                         status="error",
-                        message="Gagal mengirim goal. Pastikan node 'move_base' di robot sudah berjalan."
+                        message="Gagal mengirim goal. Pastikan action server 'navigate_to_pose' sudah berjalan."
                     )
                 
-                span.update(output=result)
-                return result
-            except Exception as e:
-                raise e
-
-@mcp.tool
-def toggle_sit_stand(ctx: Context) -> dict:
-    """
-    Memerintahkan robot untuk mengganti state antara duduk (sit) dan berdiri (stand).
-    Perintah ini menggunakan SimpleCMD dengan kode 0x21010202.
-    """
-    metadata = ctx.request_context.meta
-    session_id = metadata.session_id
-    trace_id = metadata.trace_id
-    parent_span_id = metadata.observation_id
-    model_name = getattr(metadata, 'model_name', None)
-    t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
-
-    with langfuse_client.start_as_current_observation(
-        as_type="span",
-        name="mcp-tool: toggle_sit_stand",
-        trace_context=t_ctx,
-        input={}
-    ) as span:
-        with propagate_attributes(tags=["mcp-server"]):
-            try:
-                controller = get_controller_node()
-
-                if controller is None:
-                    result = create_response(
-                        type="robot_action",
-                        status="error",
-                        message="Controller ROS Noetic tidak tersedia."
-                    )
-                    span.update(output=result)
-                    return result
-
-                # 0x21010202 adalah command untuk switch antara duduk dan berdiri
-                controller.send_simple_cmd(cmd_code=0x21010202, cmd_value=0, cmd_type=0, session_id=session_id)
-
-                result = create_response(
-                    type="robot_action",
-                    status="success",
-                    message="Robot sudah dalam posisi duduk/berdiri.",
-                    data={"cmd_code": "0x21010202"}
-                )
-                span.update(output=result)
-                return result
-            except Exception as e:
-                raise e
-
-@mcp.tool
-def say_hello(ctx: Context) -> dict:
-    """
-    Memerintahkan robot untuk melakukan aksi 'Hello' (melambaikan tangan).
-    Perintah ini menggunakan SimpleCMD dengan kode 0x21010507.
-    """
-    metadata = ctx.request_context.meta
-    session_id = metadata.session_id
-    trace_id = metadata.trace_id
-    parent_span_id = metadata.observation_id
-    model_name = getattr(metadata, 'model_name', None)
-    t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
-
-    with langfuse_client.start_as_current_observation(
-        as_type="span",
-        name="mcp-tool: say_hello",
-        trace_context=t_ctx,
-        input={}
-    ) as span:
-        with propagate_attributes(tags=["mcp-server"]):
-            try:
-                controller = get_controller_node()
-
-                if controller is None:
-                    result = create_response(
-                        type="robot_action",
-                        status="error",
-                        message="Controller ROS Noetic tidak tersedia."
-                    )
-                    span.update(output=result)
-                    return result
-
-                # 0x21010507 adalah command untuk aksi Hello (lambaikan tangan)
-                controller.send_simple_cmd(cmd_code=0x21010507, cmd_value=0, cmd_type=0, session_id=session_id)
-
-                result = create_response(
-                    type="robot_action",
-                    status="success",
-                    message="Robot sedang melakukan aksi Hello (melambaikan tangan). Pastikan robot dalam keadaan duduk (sitting state).",
-                    data={"cmd_code": "0x21010507"}
-                )
-                span.update(output=result)
-                return result
-            except Exception as e:
-                raise e
-
-@mcp.tool
-def look_up_down(ctx: Context, angle_value: int, duration: float = 3.0) -> dict:
-    """
-    Memerintahkan robot untuk menunduk (look down) atau menengadah (look up) dengan mengatur pitch angle, berjalan secara asinkron.
-    Args:
-        angle_value: Nilai antara -32767 sampai 32767. 
-                     PENTING: Nilai di antara [-6553, 6553] adalah DEAD ZONE dan akan diabaikan (dianggap 0).
-                     Gunakan nilai yang lebih besar (misal: 20000 untuk menunduk, -20000 untuk menengadah).
-        duration: Lama waktu (dalam detik) robot menahan pose ini sebelum kembali normal. Default: 3.0.
-    """
-    metadata = ctx.request_context.meta
-    session_id = metadata.session_id
-    trace_id = metadata.trace_id
-    parent_span_id = metadata.observation_id
-    model_name = getattr(metadata, 'model_name', None)
-    t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
-
-    with langfuse_client.start_as_current_observation(
-        as_type="span",
-        name="mcp-tool: look_up_down",
-        trace_context=t_ctx,
-        input={"angle_value": angle_value, "duration": duration}
-    ) as span:
-        with propagate_attributes(tags=["mcp-server"]):
-            try:
-                controller = get_controller_node()
-
-                if controller is None:
-                    result = create_response(
-                        type="robot_action",
-                        status="error",
-                        message="Controller ROS Noetic tidak tersedia."
-                    )
-                    span.update(output=result)
-                    return result
-
-                # Batasi nilai agar sesuai dengan batas maksimal joystick [-32767, 32767]
-                clamped_value = max(-32767, min(32767, angle_value))
-                
-                # Gunakan pose_async yang baru kita buat
-                controller.pose_async(pitch_angle=clamped_value, duration=duration, session_id=session_id, model_name=model_name)
-
-                result = create_response(
-                    type="robot_action",
-                    status="success",
-                    message=f"Robot sedang look up/down sesuai perintah, dan akan menahan pose selama {duration} detik.",
-                    data={"cmd_code": "pose_async", "cmd_value": clamped_value, "duration": duration}
-                )
                 span.update(output=result)
                 return result
             except Exception as e:
@@ -529,17 +349,12 @@ def get_object_waypoints(ctx: Context, query: str, location: Optional[str] = Non
             except Exception as e:
                 raise e
 
-# --- TOOLS: FILE RETRIEVAL (SOP) ---
+# --- TOOLS: FILE RETRIEVAL (DOCUMENT) ---
 
 @mcp.tool
-def get_sop_file(ctx: Context, query: str) -> dict:
+def get_documents(ctx: Context) -> dict:
     """
-    Mencari dan mengambil file SOP berdasarkan nama objek atau keywords dari database.
-    Tool ini mencari di tabel 'objects' dan mengembalikan sop_url yang terkait.
-
-    Args:
-        query: Kata kunci pencarian (nama objek atau keyword).
-               Contoh: "pressure tank", "valve", "pompa".
+    Mengambil daftar file dokumen dalam folder 'raisa' di bucket Supabase.
     """
     metadata = ctx.request_context.meta
     session_id = metadata.session_id
@@ -550,240 +365,47 @@ def get_sop_file(ctx: Context, query: str) -> dict:
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
-        name="mcp-tool: get_sop_file",
+        name="mcp-tool: get_documents",
         trace_context=t_ctx,
-        input={"query": query}
+        input={}
     ) as span:
         with propagate_attributes(tags=["mcp-server"]):
             try:
-                search_term = f"%{query}%"
-
-                # Search objects by name & keywords
-                obj_response = supabase.table("objects").select(
-                    "id, name, keywords, sop_url"
-                ).or_(
-                    f"name.ilike.{search_term},keywords.cs.{{{query}}}"
-                ).execute()
-
-                objects = obj_response.data or []
-
-                if not objects:
-                    result = create_response(
-                        type="sop_query",
-                        status="empty",
-                        message=f"Tidak ditemukan objek/SOP dengan kata kunci '{query}'.",
-                        data=[]
-                    )
-                    span.update(output=result)
-                    return result
-
-                # Format results
+                # Ambil daftar file di folder 'raisa'
+                files = supabase.storage.from_(BUCKET_NAME).list("raisa")
+                
+                # Filter out empty placeholder files
+                filtered_files = [f for f in files if f.get("name") != ".emptyFolderPlaceholder"]
+                
                 formatted = []
-                for obj in objects:
+                for file in filtered_files:
+                    file_name = file.get("name")
+                    file_path = f"raisa/{file_name}"
+                    
+                    # Buat URL publik manual sesuai pola Supabase Local/Cloud
+                    public_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{file_path}"
+                    
                     formatted.append({
-                        "object_id": obj.get("id"),
-                        "name": obj.get("name"),
-                        "keywords": obj.get("keywords", []),
-                        "sop_url": obj.get("sop_url"),
+                        "name": file_name,
+                        "url": public_url,
+                        "size": file.get("metadata", {}).get("size", 0) if file.get("metadata") else 0,
+                        "created_at": file.get("created_at", ""),
+                        "type": file.get("metadata", {}).get("mimetype", "application/octet-stream") if file.get("metadata") else "application/octet-stream",
                     })
 
                 result = create_response(
-                    type="sop_query",
+                    type="document_query",
                     status="success",
-                    message=f"Ditemukan {len(formatted)} SOP yang cocok untuk '{query}'.",
+                    message=f"Ditemukan {len(formatted)} dokumen di folder 'raisa'.",
                     data=formatted
                 )
                 span.update(output=result)
                 return result
-
             except Exception as e:
                 result = create_response(
-                    type="sop_query",
+                    type="document_query",
                     status="error",
-                    message=f"Terjadi kesalahan saat query database: {str(e)}"
+                    message=f"Gagal mengambil dokumen dari folder 'raisa': {str(e)}"
                 )
                 span.update(output=result)
                 return result
-
-# --- TOOLS: CAMERA CAPTURE & UPLOAD ---
-
-@mcp.tool
-def capture_and_inspect_image(ctx: Context, inspected_object: Optional[str] = None, sop_context: Optional[str] = None) -> dict:
-    """
-    Mengambil gambar dari kamera robot via go2rtc snapshot API.
-    Jika 'inspected_object' diberikan, gambar akan diproses oleh Gemini 
-    untuk mendeteksi objek tersebut. Jika ditemukan, gambar akan di-crop menggunakan OpenCV 
-    berdasarkan koordinat bounding box yang dikembalikan oleh model.
-    Jika 'sop_context' juga diberikan, Gemini akan melakukan analisis visual terhadap
-    objek berdasarkan prosedur SOP yang diberikan dan mengembalikan temuan inspeksinya.
-    Berikan point penting dari sop dengan jelas, ringkas, dan tidak ada perubahan dengan sop aslinya.
-    Hasil gambar (asli atau hasil crop) akan diupload ke Supabase Storage bucket 
-    'robotics-prata' folder 'captured', lalu dikembalikan public URL-nya beserta hasil analisis.
-    """
-    metadata = ctx.request_context.meta
-    session_id = metadata.session_id
-    trace_id = metadata.trace_id
-    parent_span_id = metadata.observation_id
-    model_name = getattr(metadata, 'model_name', None)
-    t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
-
-    with langfuse_client.start_as_current_observation(
-        as_type="span",
-        name="mcp-tool: capture_and_inspect_image",
-        trace_context=t_ctx,
-        input={"inspected_object": inspected_object, "sop_context": sop_context}
-    ) as span:
-        with propagate_attributes(tags=["mcp-server"]):
-            try:
-                controller = get_controller_node()
-
-                if controller is None:
-                    result = create_response(
-                        type="image_capture",
-                        status="error",
-                        message="Controller ROS Noetic belum siap. Pastikan roscore sudah berjalan."
-                    )
-                    span.update(output=result)
-                    return result
-
-                # 1. Capture image dari kamera
-                jpeg_bytes = controller.capture_image(timeout=10.0)
-
-                if jpeg_bytes is None:
-                    result = create_response(
-                        type="image_capture",
-                        status="error",
-                        message="Gagal mengambil gambar dari go2rtc snapshot API (timeout atau stream tidak tersedia)."
-                    )
-                    span.update(output=result)
-                    return result
-
-                # 1.5 Object Detection, Cropping & SOP Analysis (Opsional)
-                analysis_data = None
-                if inspected_object:
-                    try:
-                        client = genai.Client()
-
-                        # Pilih schema dan prompt berdasarkan ada/tidaknya SOP
-                        if sop_context:
-                            prompt = (
-                                f"Kamu adalah inspektur visual profesional.\n"
-                                f"1. Deteksi objek: '{inspected_object}' pada gambar. "
-                                f"Jika ada, set is_detected=true dan berikan bounding box (ymin, xmin, ymax, xmax) "
-                                f"sebagai normalized integers 0-1000 (0=atas/kiri, 1000=bawah/kanan).\n"
-                                f"2. Analisis kondisi visual objek berdasarkan SOP berikut:\n"
-                                f"--- SOP START ---\n{sop_context}\n--- SOP END ---\n"
-                                f"3. Di field 'analysis', berikan analisis detail kondisi objek berdasarkan poin-poin SOP.\n"
-                                f"4. Di field 'findings', list temuan spesifik (baik normal maupun abnormal).\n"
-                                f"5. Di field 'status', set 'normal' jika semua sesuai SOP, 'abnormal' jika ada ketidaksesuaian, "
-                                f"atau 'inconclusive' jika gambar kurang jelas untuk menilai."
-                            )
-                            schema = InspectionResult
-                        else:
-                            prompt = (
-                                f"Tolong deteksi objek: {inspected_object} apakah ada atau tidak pada gambar. "
-                                f"Jika ada, set is_detected ke true dan berikan bounding box coordinates "
-                                f"(ymin, xmin, ymax, xmax) sebagai normalized integers antara 0 dan 1000, "
-                                f"dimana 0 adalah bagian atas/kiri dan 1000 adalah bagian bawah/kanan."
-                            )
-                            schema = ObjectDetectionResult
-
-                        response = client.models.generate_content(
-                            model='gemini-3.1-pro-preview',
-                            contents=[
-                                prompt,
-                                types.Part.from_bytes(data=jpeg_bytes, mime_type='image/jpeg')
-                            ],
-                            config=types.GenerateContentConfig(
-                                response_mime_type="application/json",
-                                response_schema=schema,
-                                temperature=0.0,
-                            ),
-                        )
-                        
-                        result_gemini = response.parsed
-
-                        # Simpan hasil analisis SOP jika ada
-                        if sop_context and isinstance(result_gemini, InspectionResult):
-                            analysis_data = {
-                                "analysis": result_gemini.analysis,
-                                "findings": result_gemini.findings,
-                                "inspection_status": result_gemini.status,
-                            }
-                        
-                        if result_gemini and result_gemini.is_detected:
-                            # Convert bytes to numpy array
-                            nparr = np.frombuffer(jpeg_bytes, np.uint8)
-                            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                            
-                            if img is not None:
-                                h, w = img.shape[:2]
-                                
-                                # Un-normalize coordinates dari range [0, 1000] ke pixel dimensi gambar asli
-                                ymin_px = int((result_gemini.ymin / 1000.0) * h)
-                                ymax_px = int((result_gemini.ymax / 1000.0) * h)
-                                xmin_px = int((result_gemini.xmin / 1000.0) * w)
-                                xmax_px = int((result_gemini.xmax / 1000.0) * w)
-                                
-                                # Tambahkan 10% padding agar objek tidak terpotong terlalu mepet
-                                pad_y = int((ymax_px - ymin_px) * 0.2)
-                                pad_x = int((xmax_px - xmin_px) * 0.2)
-                                
-                                # Clamp coordinates agar tidak melebihi batas gambar
-                                ymin = max(0, min(h - 1, ymin_px - pad_y))
-                                ymax = max(ymin + 1, min(h, ymax_px + pad_y))
-                                xmin = max(0, min(w - 1, xmin_px - pad_x))
-                                xmax = max(xmin + 1, min(w, xmax_px + pad_x))
-                                
-                                cropped_img = img[ymin:ymax, xmin:xmax]
-                                
-                                # Encode back to JPEG
-                                success, buffer = cv2.imencode('.jpg', cropped_img)
-                                if success:
-                                    jpeg_bytes = buffer.tobytes()
-                    except Exception as e:
-                        print(f"Error during Gemini detection/inspection: {e}")
-                        # Lanjutkan dengan gambar original jika terjadi error
-
-                # 2. Generate nama file dengan timestamp
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filepath = f"captured/capture_{timestamp}_{session_id}.jpg"
-
-                # 3. Upload ke Supabase Storage
-                supabase.storage.from_(BUCKET_NAME).upload(
-                    path=filepath,
-                    file=jpeg_bytes,
-                    file_options={"content-type": "image/jpeg"}
-                )
-
-                # 4. Buat public URL
-                public_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{filepath}"
-
-                response_data = {
-                    "filepath": filepath,
-                    "public_url": public_url
-                }
-                if analysis_data:
-                    response_data["inspection"] = analysis_data
-
-                msg = "Gambar berhasil diambil, diupload, dan dianalisis berdasarkan SOP." if analysis_data else "Gambar berhasil diambil dan diupload."
-
-                result = create_response(
-                    type="image_capture",
-                    status="success",
-                    message=msg,
-                    data=response_data
-                )
-                span.update(output=result)
-                return result
-
-            except Exception as e:
-                result = create_response(
-                    type="image_capture",
-                    status="error",
-                    message=f"Gagal mengupload gambar ke Supabase: {str(e)}"
-                )
-                span.update(output=result)
-                return result
-            except Exception as e:
-                raise e
