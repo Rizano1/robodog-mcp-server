@@ -703,6 +703,283 @@ def get_sop_file(ctx: Context, query: str) -> dict:
                 return result
 
 
+# --- VISION INSPECTION HELPERS ---
+
+def _build_detection_prompt(inspected_object: str) -> str:
+    """Prompt untuk object detection saja (tanpa SOP analysis)."""
+    return (
+        f"Tolong deteksi objek: {inspected_object} apakah ada atau tidak pada gambar. "
+        f"Jika ada, set is_detected ke true dan berikan bounding box coordinates "
+        f"(ymin, xmin, ymax, xmax) sebagai normalized integers antara 0 dan 1000, "
+        f"dimana 0 adalah bagian atas/kiri dan 1000 adalah bagian bawah/kanan.\n\n"
+        f"Respond ONLY with valid JSON in this exact format:\n"
+        f'{{"is_detected": true/false, "ymin": 0, "xmin": 0, "ymax": 0, "xmax": 0}}'
+    )
+
+def _build_inspection_prompt(inspected_object: str, sop_context: str) -> str:
+    """Prompt untuk object detection + SOP inspection analysis."""
+    return (
+        f"Kamu adalah inspektur visual profesional.\n"
+        f"1. Deteksi objek: '{inspected_object}' pada gambar. "
+        f"Jika ada, set is_detected=true dan berikan bounding box (ymin, xmin, ymax, xmax) "
+        f"sebagai normalized integers 0-1000 (0=atas/kiri, 1000=bawah/kanan).\n"
+        f"2. Analisis kondisi visual objek berdasarkan SOP berikut:\n"
+        f"--- SOP START ---\n{sop_context}\n--- SOP END ---\n"
+        f"3. Di field 'analysis', berikan analisis detail kondisi objek berdasarkan poin-poin SOP.\n"
+        f"4. Di field 'findings', list temuan spesifik (baik normal maupun abnormal).\n"
+        f"5. Di field 'status', set 'normal' jika semua sesuai SOP, 'abnormal' jika ada ketidaksesuaian, "
+        f"atau 'inconclusive' jika gambar kurang jelas untuk menilai.\n\n"
+        f"Respond ONLY with valid JSON in this exact format:\n"
+        f'{{"is_detected": true/false, "ymin": 0, "xmin": 0, "ymax": 0, "xmax": 0, '
+        f'"analysis": "...", "findings": ["..."], "status": "normal/abnormal/inconclusive"}}'
+    )
+
+
+def _inspect_with_gemini(jpeg_bytes: bytes, inspected_object: str, sop_context: Optional[str] = None, model_name: str = "gemini-2.5-flash") -> tuple[dict | None, dict | None]:
+    """
+    Inspect image menggunakan Gemini SDK (native structured output).
+    
+    Returns:
+        (detection_result, analysis_data) — detection_result berisi bbox coords,
+        analysis_data berisi SOP findings (atau None jika tanpa SOP).
+    """
+    client = genai.Client()
+
+    if sop_context:
+        prompt = (
+            f"Kamu adalah inspektur visual profesional.\n"
+            f"1. Deteksi objek: '{inspected_object}' pada gambar. "
+            f"Jika ada, set is_detected=true dan berikan bounding box (ymin, xmin, ymax, xmax) "
+            f"sebagai normalized integers 0-1000 (0=atas/kiri, 1000=bawah/kanan).\n"
+            f"2. Analisis kondisi visual objek berdasarkan SOP berikut:\n"
+            f"--- SOP START ---\n{sop_context}\n--- SOP END ---\n"
+            f"3. Di field 'analysis', berikan analisis detail kondisi objek berdasarkan poin-poin SOP.\n"
+            f"4. Di field 'findings', list temuan spesifik (baik normal maupun abnormal).\n"
+            f"5. Di field 'status', set 'normal' jika semua sesuai SOP, 'abnormal' jika ada ketidaksesuaian, "
+            f"atau 'inconclusive' jika gambar kurang jelas untuk menilai."
+        )
+        schema = InspectionResult
+    else:
+        prompt = (
+            f"Tolong deteksi objek: {inspected_object} apakah ada atau tidak pada gambar. "
+            f"Jika ada, set is_detected ke true dan berikan bounding box coordinates "
+            f"(ymin, xmin, ymax, xmax) sebagai normalized integers antara 0 dan 1000, "
+            f"dimana 0 adalah bagian atas/kiri dan 1000 adalah bagian bawah/kanan."
+        )
+        schema = ObjectDetectionResult
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=[
+            prompt,
+            types.Part.from_bytes(data=jpeg_bytes, mime_type='image/jpeg')
+        ],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=schema,
+            temperature=0.0,
+        ),
+    )
+
+    result = response.parsed
+    if result is None:
+        return None, None
+
+    analysis_data = None
+    if sop_context and isinstance(result, InspectionResult):
+        analysis_data = {
+            "analysis": result.analysis,
+            "findings": result.findings,
+            "inspection_status": result.status,
+        }
+
+    detection = {
+        "is_detected": result.is_detected,
+        "ymin": result.ymin,
+        "xmin": result.xmin,
+        "ymax": result.ymax,
+        "xmax": result.xmax,
+    }
+    return detection, analysis_data
+
+
+import json as json_module
+
+def _inspect_with_openai_compatible(jpeg_bytes: bytes, inspected_object: str, sop_context: Optional[str] = None, model_name: str = "qwen2.5:7b") -> tuple[dict | None, dict | None]:
+    """
+    Inspect image menggunakan OpenAI-compatible API (Ollama/Qwen atau OpenAI GPT).
+    Mengirim gambar sebagai base64 data URL dalam message content.
+    
+    Returns:
+        (detection_result, analysis_data)
+    """
+    import requests as req_lib
+
+    # Build prompt
+    if sop_context:
+        prompt = _build_inspection_prompt(inspected_object, sop_context)
+    else:
+        prompt = _build_detection_prompt(inspected_object)
+
+    # Encode image ke base64
+    img_b64 = base64.b64encode(jpeg_bytes).decode("utf-8")
+
+    # Build messages dengan image (OpenAI vision format)
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{img_b64}"
+                    }
+                }
+            ]
+        }
+    ]
+
+    # Determine endpoint and headers
+    if model_name in OPENAI_MODELS:
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+    else:
+        # Ollama
+        url = f"{OLLAMA_HOST}/v1/chat/completions"
+        headers = {"Content-Type": "application/json"}
+
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "temperature": 0.0,
+    }
+
+    resp = req_lib.post(url, json=payload, headers=headers, timeout=120)
+    resp.raise_for_status()
+    resp_json = resp.json()
+
+    # Extract text content from response
+    raw_text = resp_json.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+    # Parse JSON dari response text
+    # Model kadang membungkus JSON dalam markdown code block
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        # Remove markdown code fences
+        lines = cleaned.split("\n")
+        # Remove first line (```json or ```) and last line (```)
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        cleaned = "\n".join(lines).strip()
+
+    try:
+        parsed = json_module.loads(cleaned)
+    except json_module.JSONDecodeError:
+        print(f"⚠️ Failed to parse vision response as JSON: {raw_text[:200]}")
+        return None, None
+
+    analysis_data = None
+    if sop_context and "analysis" in parsed:
+        analysis_data = {
+            "analysis": parsed.get("analysis", ""),
+            "findings": parsed.get("findings", []),
+            "inspection_status": parsed.get("status", "inconclusive"),
+        }
+
+    detection = {
+        "is_detected": parsed.get("is_detected", False),
+        "ymin": parsed.get("ymin", 0),
+        "xmin": parsed.get("xmin", 0),
+        "ymax": parsed.get("ymax", 0),
+        "xmax": parsed.get("xmax", 0),
+    }
+    return detection, analysis_data
+
+
+def inspect_image(jpeg_bytes: bytes, inspected_object: str, sop_context: Optional[str] = None, model_name: Optional[str] = None) -> tuple[dict | None, dict | None]:
+    """
+    Dispatcher: route vision inspection ke handler yang sesuai berdasarkan model_name.
+    
+    Args:
+        jpeg_bytes: Raw JPEG image bytes dari kamera.
+        inspected_object: Nama objek yang ingin dideteksi.
+        sop_context: (Opsional) SOP text untuk analisis visual.
+        model_name: Model yang dipilih user. Menentukan handler mana yang dipakai.
+    
+    Returns:
+        (detection_result, analysis_data) — detection_result dict dengan is_detected + bbox,
+        analysis_data dict dengan SOP findings atau None.
+    """
+    # Default ke Gemini jika tidak ada model_name
+    if not model_name or model_name.startswith("gemini"):
+        # Untuk Gemini, gunakan model vision terbaik yang tersedia
+        gemini_vision_model = model_name if model_name else "gemini-2.5-flash"
+        print(f"   🔍 Inspecting with Gemini ({gemini_vision_model})...")
+        return _inspect_with_gemini(jpeg_bytes, inspected_object, sop_context, gemini_vision_model)
+
+    elif model_name in OLLAMA_MODELS or model_name in OPENAI_MODELS:
+        provider = "OpenAI GPT" if model_name in OPENAI_MODELS else "Ollama"
+        print(f"   🔍 Inspecting with {provider} ({model_name})...")
+        return _inspect_with_openai_compatible(jpeg_bytes, inspected_object, sop_context, model_name)
+
+    else:
+        # Fallback: model tidak dikenal, gunakan Gemini default
+        print(f"   ⚠️ Unknown model '{model_name}' for vision. Falling back to Gemini.")
+        return _inspect_with_gemini(jpeg_bytes, inspected_object, sop_context, "gemini-2.5-flash")
+
+
+def crop_detected_object(jpeg_bytes: bytes, detection: dict) -> bytes:
+    """
+    Crop gambar berdasarkan bounding box dari detection result.
+    Menambahkan 20% padding agar objek tidak terpotong terlalu mepet.
+    
+    Args:
+        jpeg_bytes: Raw JPEG bytes gambar asli.
+        detection: Dict berisi is_detected, ymin, xmin, ymax, xmax (normalized 0-1000).
+    
+    Returns:
+        Cropped JPEG bytes, atau original bytes jika crop gagal.
+    """
+    try:
+        nparr = np.frombuffer(jpeg_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if img is None:
+            return jpeg_bytes
+
+        h, w = img.shape[:2]
+
+        # Un-normalize coordinates dari range [0, 1000] ke pixel
+        ymin_px = int((detection["ymin"] / 1000.0) * h)
+        ymax_px = int((detection["ymax"] / 1000.0) * h)
+        xmin_px = int((detection["xmin"] / 1000.0) * w)
+        xmax_px = int((detection["xmax"] / 1000.0) * w)
+
+        # Tambahkan 20% padding
+        pad_y = int((ymax_px - ymin_px) * 0.2)
+        pad_x = int((xmax_px - xmin_px) * 0.2)
+
+        # Clamp coordinates
+        ymin = max(0, min(h - 1, ymin_px - pad_y))
+        ymax = max(ymin + 1, min(h, ymax_px + pad_y))
+        xmin = max(0, min(w - 1, xmin_px - pad_x))
+        xmax = max(xmin + 1, min(w, xmax_px + pad_x))
+
+        cropped_img = img[ymin:ymax, xmin:xmax]
+
+        success, buffer = cv2.imencode('.jpg', cropped_img)
+        if success:
+            return buffer.tobytes()
+    except Exception as e:
+        print(f"   ⚠️ Error during cropping: {e}")
+
+    return jpeg_bytes
+
+
+
 # --- TOOLS: CAMERA CAPTURE & UPLOAD ---
 
 
@@ -767,89 +1044,17 @@ def capture_and_inspect_image(
                 analysis_data = None
                 if inspected_object:
                     try:
-                        client = genai.Client()
-
-                        # Pilih schema dan prompt berdasarkan ada/tidaknya SOP
-                        if sop_context:
-                            prompt = (
-                                f"Kamu adalah inspektur visual profesional.\n"
-                                f"1. Deteksi objek: '{inspected_object}' pada gambar. "
-                                f"Jika ada, set is_detected=true dan berikan bounding box (ymin, xmin, ymax, xmax) "
-                                f"sebagai normalized integers 0-1000 (0=atas/kiri, 1000=bawah/kanan).\n"
-                                f"2. Analisis kondisi visual objek berdasarkan SOP berikut:\n"
-                                f"--- SOP START ---\n{sop_context}\n--- SOP END ---\n"
-                                f"3. Di field 'analysis', berikan analisis detail kondisi objek berdasarkan poin-poin SOP.\n"
-                                f"4. Di field 'findings', list temuan spesifik (baik normal maupun abnormal).\n"
-                                f"5. Di field 'status', set 'normal' jika semua sesuai SOP, 'abnormal' jika ada ketidaksesuaian, "
-                                f"atau 'inconclusive' jika gambar kurang jelas untuk menilai."
-                            )
-                            schema = InspectionResult
-                        else:
-                            prompt = (
-                                f"Tolong deteksi objek: {inspected_object} apakah ada atau tidak pada gambar. "
-                                f"Jika ada, set is_detected ke true dan berikan bounding box coordinates "
-                                f"(ymin, xmin, ymax, xmax) sebagai normalized integers antara 0 dan 1000, "
-                                f"dimana 0 adalah bagian atas/kiri dan 1000 adalah bagian bawah/kanan."
-                            )
-                            schema = ObjectDetectionResult
-
-                        response = client.models.generate_content(
-                            model=model_name,
-                            contents=[
-                                prompt,
-                                types.Part.from_bytes(
-                                    data=jpeg_bytes, mime_type="image/jpeg"
-                                ),
-                            ],
-                            config=types.GenerateContentConfig(
-                                response_mime_type="application/json",
-                                response_schema=schema,
-                                temperature=0.0,
-                            ),
+                        detection, analysis_data = inspect_image(
+                            jpeg_bytes=jpeg_bytes,
+                            inspected_object=inspected_object,
+                            sop_context=sop_context,
+                            model_name=model_name,
                         )
 
-                        result_gemini = response.parsed
-
-                        # Simpan hasil analisis SOP jika ada
-                        if sop_context and isinstance(result_gemini, InspectionResult):
-                            analysis_data = {
-                                "analysis": result_gemini.analysis,
-                                "findings": result_gemini.findings,
-                                "inspection_status": result_gemini.status,
-                            }
-
-                        if result_gemini and result_gemini.is_detected:
-                            # Convert bytes to numpy array
-                            nparr = np.frombuffer(jpeg_bytes, np.uint8)
-                            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-                            if img is not None:
-                                h, w = img.shape[:2]
-
-                                # Un-normalize coordinates dari range [0, 1000] ke pixel dimensi gambar asli
-                                ymin_px = int((result_gemini.ymin / 1000.0) * h)
-                                ymax_px = int((result_gemini.ymax / 1000.0) * h)
-                                xmin_px = int((result_gemini.xmin / 1000.0) * w)
-                                xmax_px = int((result_gemini.xmax / 1000.0) * w)
-
-                                # Tambahkan 10% padding agar objek tidak terpotong terlalu mepet
-                                pad_y = int((ymax_px - ymin_px) * 0.2)
-                                pad_x = int((xmax_px - xmin_px) * 0.2)
-
-                                # Clamp coordinates agar tidak melebihi batas gambar
-                                ymin = max(0, min(h - 1, ymin_px - pad_y))
-                                ymax = max(ymin + 1, min(h, ymax_px + pad_y))
-                                xmin = max(0, min(w - 1, xmin_px - pad_x))
-                                xmax = max(xmin + 1, min(w, xmax_px + pad_x))
-
-                                cropped_img = img[ymin:ymax, xmin:xmax]
-
-                                # Encode back to JPEG
-                                success, buffer = cv2.imencode(".jpg", cropped_img)
-                                if success:
-                                    jpeg_bytes = buffer.tobytes()
+                        if detection and detection.get("is_detected"):
+                            jpeg_bytes = crop_detected_object(jpeg_bytes, detection)
                     except Exception as e:
-                        print(f"Error during Gemini detection/inspection: {e}")
+                        print(f"Error during detection/inspection: {e}")
                         # Lanjutkan dengan gambar original jika terjadi error
 
                 # 2. Generate nama file dengan timestamp
