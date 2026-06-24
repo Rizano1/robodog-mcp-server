@@ -1,26 +1,30 @@
-import os
+import base64
 import io
 import math
-import base64
+import os
 from datetime import datetime
+from io import BytesIO
+from typing import Any, Dict, List, Optional
+
+import cv2
+import httpx
+import numpy as np
+from dotenv import load_dotenv
 from fastmcp import FastMCP
 from fastmcp.server.context import Context
-from supabase import create_client, Client
-from typing import List, Dict, Any, Optional
-from io import BytesIO
-from dotenv import load_dotenv
-import cv2
-import numpy as np
-import httpx
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
-from langfuse import observe, propagate_attributes, get_client
+
 # Import Controller ROS Noetic Anda
-from utils.ros_manager import get_controller_node 
+from utils.ros_manager import get_controller_node
+
+from langfuse import get_client, observe, propagate_attributes
+from supabase import Client, create_client
 
 load_dotenv()
 langfuse_client = get_client()
+
 
 class ObjectDetectionResult(BaseModel):
     is_detected: bool
@@ -28,6 +32,7 @@ class ObjectDetectionResult(BaseModel):
     xmin: int
     ymax: int
     xmax: int
+
 
 class InspectionResult(BaseModel):
     is_detected: bool
@@ -38,6 +43,7 @@ class InspectionResult(BaseModel):
     analysis: str
     findings: list[str]
     status: str  # "normal", "abnormal", "inconclusive"
+
 
 mcp = FastMCP("robot_api_mcp")
 
@@ -61,17 +67,19 @@ def create_response(type: str, status: str, message: str, data: Any = None) -> d
     Mengembalikan dictionary standar.
     FastMCP akan otomatis mengonversinya menjadi JSON saat dikirim ke client.
     """
-    return {
-        "type": type,
-        "status": status,
-        "message": message,
-        "data": data
-    }
+    return {"type": type, "status": status, "message": message, "data": data}
+
 
 # --- TOOLS: ROBOT ACTION ---
 
+
 @mcp.tool
-def async_move(ctx: Context, linear_speed: float = 0.0, angular_speed: float = 0.0, duration: float = 5.0) -> dict:
+def async_move(
+    ctx: Context,
+    linear_speed: float = 0.0,
+    angular_speed: float = 0.0,
+    duration: float = 5.0,
+) -> dict:
     """
     Memerintahkan robot untuk bergerak manual (open-loop).
     """
@@ -79,14 +87,20 @@ def async_move(ctx: Context, linear_speed: float = 0.0, angular_speed: float = 0
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     observation_id = metadata.observation_id
-    model_name = getattr(metadata, 'model_name', None)
-    t_ctx = {"trace_id": trace_id, "parent_span_id": observation_id} if trace_id else None
+    model_name = getattr(metadata, "model_name", None)
+    t_ctx = (
+        {"trace_id": trace_id, "parent_span_id": observation_id} if trace_id else None
+    )
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
         name="mcp-tool: move",
         trace_context=t_ctx,
-        input={"linear_speed": linear_speed, "angular_speed": angular_speed, "duration": duration}
+        input={
+            "linear_speed": linear_speed,
+            "angular_speed": angular_speed,
+            "duration": duration,
+        },
     ) as span:
         with propagate_attributes(tags=["mcp-server"]):
             try:
@@ -96,14 +110,16 @@ def async_move(ctx: Context, linear_speed: float = 0.0, angular_speed: float = 0
                     result = create_response(
                         type="robot_action",
                         status="error",
-                        message="Controller ROS Noetic belum siap atau roscore tidak terdeteksi."
+                        message="Controller ROS Noetic belum siap atau roscore tidak terdeteksi.",
                     )
                     span.update(output=result)
                     return result
 
                 # Memanggil metode async pada controller Noetic
-                controller.move_async(linear_speed, angular_speed, duration, session_id, model_name)
-                
+                controller.move_async(
+                    linear_speed, angular_speed, duration, session_id, model_name
+                )
+
                 result = create_response(
                     type="robot_action",
                     status="running",
@@ -111,16 +127,19 @@ def async_move(ctx: Context, linear_speed: float = 0.0, angular_speed: float = 0
                     data={
                         "linear_speed": linear_speed,
                         "angular_speed": angular_speed,
-                        "duration": duration
-                    }
+                        "duration": duration,
+                    },
                 )
                 span.update(output=result)
                 return result
             except Exception as e:
                 raise e
 
+
 @mcp.tool
-def async_navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: float) -> dict:
+def async_navigate_to_waypoint(
+    ctx: Context, x: float, y: float, theta_deg: float
+) -> dict:
     """
     Mengirimkan tujuan navigasi ke stack move_base (ROS 1).
     Args:
@@ -132,14 +151,16 @@ def async_navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: floa
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
-    model_name = getattr(metadata, 'model_name', None)
-    t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    model_name = getattr(metadata, "model_name", None)
+    t_ctx = (
+        {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    )
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
         name="mcp-tool: navigate_to_waypoint",
         trace_context=t_ctx,
-        input={"x": x, "y": y, "theta_deg": theta_deg}
+        input={"x": x, "y": y, "theta_deg": theta_deg},
     ) as span:
         with propagate_attributes(tags=["mcp-server"]):
             try:
@@ -149,7 +170,7 @@ def async_navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: floa
                     result = create_response(
                         type="robot_action",
                         status="error",
-                        message="Controller ROS Noetic tidak tersedia."
+                        message="Controller ROS Noetic tidak tersedia.",
                     )
                     span.update(output=result)
                     return result
@@ -158,26 +179,33 @@ def async_navigate_to_waypoint(ctx: Context, x: float, y: float, theta_deg: floa
                 theta_rad = math.radians(theta_deg)
 
                 # Mengirim goal ke Action Server move_base
-                goal_sent = controller.send_nav_goal_async(x, y, theta_rad, session_id, model_name)
-                
+                goal_sent = controller.send_nav_goal_async(
+                    x, y, theta_rad, session_id, model_name
+                )
+
                 if goal_sent:
                     result = create_response(
                         type="robot_action",
                         status="running",
                         message=f"Perintah dikirim. Robot sedang menuju ({x:.2f}, {y:.2f}) arah {theta_deg:.0f}°. Jangan lakukan perintah apapun hingga robot selesai bergerak.",
-                        data={"target_x": x, "target_y": y, "target_theta_deg": theta_deg}
+                        data={
+                            "target_x": x,
+                            "target_y": y,
+                            "target_theta_deg": theta_deg,
+                        },
                     )
                 else:
                     result = create_response(
                         type="robot_action",
                         status="error",
-                        message="Gagal mengirim goal. Pastikan node 'move_base' di robot sudah berjalan."
+                        message="Gagal mengirim goal. Pastikan node 'move_base' di robot sudah berjalan.",
                     )
-                
+
                 span.update(output=result)
                 return result
             except Exception as e:
                 raise e
+
 
 @mcp.tool
 def toggle_sit_stand(ctx: Context) -> dict:
@@ -189,14 +217,13 @@ def toggle_sit_stand(ctx: Context) -> dict:
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
-    model_name = getattr(metadata, 'model_name', None)
-    t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    model_name = getattr(metadata, "model_name", None)
+    t_ctx = (
+        {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    )
 
     with langfuse_client.start_as_current_observation(
-        as_type="span",
-        name="mcp-tool: toggle_sit_stand",
-        trace_context=t_ctx,
-        input={}
+        as_type="span", name="mcp-tool: toggle_sit_stand", trace_context=t_ctx, input={}
     ) as span:
         with propagate_attributes(tags=["mcp-server"]):
             try:
@@ -206,24 +233,27 @@ def toggle_sit_stand(ctx: Context) -> dict:
                     result = create_response(
                         type="robot_action",
                         status="error",
-                        message="Controller ROS Noetic tidak tersedia."
+                        message="Controller ROS Noetic tidak tersedia.",
                     )
                     span.update(output=result)
                     return result
 
                 # 0x21010202 adalah command untuk switch antara duduk dan berdiri
-                controller.send_simple_cmd(cmd_code=0x21010202, cmd_value=0, cmd_type=0, session_id=session_id)
+                controller.send_simple_cmd(
+                    cmd_code=0x21010202, cmd_value=0, cmd_type=0, session_id=session_id
+                )
 
                 result = create_response(
                     type="robot_action",
                     status="success",
                     message="Robot sudah dalam posisi duduk/berdiri.",
-                    data={"cmd_code": "0x21010202"}
+                    data={"cmd_code": "0x21010202"},
                 )
                 span.update(output=result)
                 return result
             except Exception as e:
                 raise e
+
 
 @mcp.tool
 def say_hello(ctx: Context) -> dict:
@@ -235,14 +265,13 @@ def say_hello(ctx: Context) -> dict:
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
-    model_name = getattr(metadata, 'model_name', None)
-    t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    model_name = getattr(metadata, "model_name", None)
+    t_ctx = (
+        {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    )
 
     with langfuse_client.start_as_current_observation(
-        as_type="span",
-        name="mcp-tool: say_hello",
-        trace_context=t_ctx,
-        input={}
+        as_type="span", name="mcp-tool: say_hello", trace_context=t_ctx, input={}
     ) as span:
         with propagate_attributes(tags=["mcp-server"]):
             try:
@@ -252,31 +281,34 @@ def say_hello(ctx: Context) -> dict:
                     result = create_response(
                         type="robot_action",
                         status="error",
-                        message="Controller ROS Noetic tidak tersedia."
+                        message="Controller ROS Noetic tidak tersedia.",
                     )
                     span.update(output=result)
                     return result
 
                 # 0x21010507 adalah command untuk aksi Hello (lambaikan tangan)
-                controller.send_simple_cmd(cmd_code=0x21010507, cmd_value=0, cmd_type=0, session_id=session_id)
+                controller.send_simple_cmd(
+                    cmd_code=0x21010507, cmd_value=0, cmd_type=0, session_id=session_id
+                )
 
                 result = create_response(
                     type="robot_action",
                     status="success",
                     message="Robot sedang melakukan aksi Hello (melambaikan tangan). Pastikan robot dalam keadaan duduk (sitting state).",
-                    data={"cmd_code": "0x21010507"}
+                    data={"cmd_code": "0x21010507"},
                 )
                 span.update(output=result)
                 return result
             except Exception as e:
                 raise e
 
+
 @mcp.tool
 def look_up_down(ctx: Context, angle_value: int, duration: float = 3.0) -> dict:
     """
     Memerintahkan robot untuk menunduk (look down) atau menengadah (look up) dengan mengatur pitch angle, berjalan secara asinkron.
     Args:
-        angle_value: Nilai antara -32767 sampai 32767. 
+        angle_value: Nilai antara -32767 sampai 32767.
                      PENTING: Nilai di antara [-6553, 6553] adalah DEAD ZONE dan akan diabaikan (dianggap 0).
                      Gunakan nilai yang lebih besar (misal: 20000 untuk menunduk, -20000 untuk menengadah).
         duration: Lama waktu (dalam detik) robot menahan pose ini sebelum kembali normal. Default: 3.0.
@@ -285,14 +317,16 @@ def look_up_down(ctx: Context, angle_value: int, duration: float = 3.0) -> dict:
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
-    model_name = getattr(metadata, 'model_name', None)
-    t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    model_name = getattr(metadata, "model_name", None)
+    t_ctx = (
+        {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    )
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
         name="mcp-tool: look_up_down",
         trace_context=t_ctx,
-        input={"angle_value": angle_value, "duration": duration}
+        input={"angle_value": angle_value, "duration": duration},
     ) as span:
         with propagate_attributes(tags=["mcp-server"]):
             try:
@@ -302,32 +336,45 @@ def look_up_down(ctx: Context, angle_value: int, duration: float = 3.0) -> dict:
                     result = create_response(
                         type="robot_action",
                         status="error",
-                        message="Controller ROS Noetic tidak tersedia."
+                        message="Controller ROS Noetic tidak tersedia.",
                     )
                     span.update(output=result)
                     return result
 
                 # Batasi nilai agar sesuai dengan batas maksimal joystick [-32767, 32767]
                 clamped_value = max(-32767, min(32767, angle_value))
-                
+
                 # Gunakan pose_async yang baru kita buat
-                controller.pose_async(pitch_angle=clamped_value, duration=duration, session_id=session_id, model_name=model_name)
+                controller.pose_async(
+                    pitch_angle=clamped_value,
+                    duration=duration,
+                    session_id=session_id,
+                    model_name=model_name,
+                )
 
                 result = create_response(
                     type="robot_action",
                     status="success",
                     message=f"Robot sedang look up/down sesuai perintah, dan akan menahan pose selama {duration} detik.",
-                    data={"cmd_code": "pose_async", "cmd_value": clamped_value, "duration": duration}
+                    data={
+                        "cmd_code": "pose_async",
+                        "cmd_value": clamped_value,
+                        "duration": duration,
+                    },
                 )
                 span.update(output=result)
                 return result
             except Exception as e:
                 raise e
 
+
 # --- TOOLS: DATABASE QUERY ---
 
+
 @mcp.tool
-def get_object_waypoints(ctx: Context, query: str, location: Optional[str] = None) -> dict:
+def get_object_waypoints(
+    ctx: Context, query: str, location: Optional[str] = None
+) -> dict:
     """
     Mencari objek inspeksi dan koordinat waypoint-nya di database.
     Mengembalikan data hierarkis: Map → Location path → Object → Waypoint.
@@ -342,36 +389,49 @@ def get_object_waypoints(ctx: Context, query: str, location: Optional[str] = Non
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
-    model_name = getattr(metadata, 'model_name', None)
-    t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    model_name = getattr(metadata, "model_name", None)
+    t_ctx = (
+        {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    )
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
         name="mcp-tool: get_object_waypoints",
         trace_context=t_ctx,
-        input={"query": query, "location": location}
+        input={"query": query, "location": location},
     ) as span:
         with propagate_attributes(tags=["mcp-server"]):
             try:
                 search_term = f"%{query}%"
 
                 # --- 1. Search objects by name & keywords ---
-                obj_response = supabase.table("objects").select("*").or_(
-                    f"name.ilike.{search_term},keywords.cs.{{{query}}}"
-                ).execute()
+                obj_response = (
+                    supabase.table("objects")
+                    .select("*")
+                    .or_(f"name.ilike.{search_term},keywords.cs.{{{query}}}")
+                    .execute()
+                )
                 matched_object_ids = [obj["id"] for obj in (obj_response.data or [])]
 
                 # --- 2. Search waypoints by display_name OR matching object_id ---
                 if matched_object_ids:
                     # Build filter: waypoints whose object_id matches OR display_name matches
                     obj_id_filter = ",".join(str(i) for i in matched_object_ids)
-                    wp_response = supabase.table("object-waypoints").select("*").or_(
-                        f"display_name.ilike.{search_term},object_id.in.({obj_id_filter})"
-                    ).execute()
+                    wp_response = (
+                        supabase.table("object-waypoints")
+                        .select("*")
+                        .or_(
+                            f"display_name.ilike.{search_term},object_id.in.({obj_id_filter})"
+                        )
+                        .execute()
+                    )
                 else:
-                    wp_response = supabase.table("object-waypoints").select("*").ilike(
-                        "display_name", search_term
-                    ).execute()
+                    wp_response = (
+                        supabase.table("object-waypoints")
+                        .select("*")
+                        .ilike("display_name", search_term)
+                        .execute()
+                    )
 
                 waypoints = wp_response.data or []
 
@@ -380,7 +440,7 @@ def get_object_waypoints(ctx: Context, query: str, location: Optional[str] = Non
                         type="navigation_query",
                         status="empty",
                         message=f"Tidak ditemukan objek dengan kata kunci '{query}'.",
-                        data=[]
+                        data=[],
                     )
                     span.update(output=result)
                     return result
@@ -398,23 +458,26 @@ def get_object_waypoints(ctx: Context, query: str, location: Optional[str] = Non
                 all_locations = {}
                 if location_ids:
                     loc_response = supabase.table("locations").select("*").execute()
-                    for loc in (loc_response.data or []):
+                    for loc in loc_response.data or []:
                         all_locations[loc["id"]] = loc
 
                 # --- 5. Fetch referenced objects ---
                 objects_map = {}
                 if object_ids:
                     obj_ids_str = ",".join(str(i) for i in object_ids)
-                    obj_detail = supabase.table("objects").select("*").in_(
-                        "id", list(object_ids)
-                    ).execute()
-                    for obj in (obj_detail.data or []):
+                    obj_detail = (
+                        supabase.table("objects")
+                        .select("*")
+                        .in_("id", list(object_ids))
+                        .execute()
+                    )
+                    for obj in obj_detail.data or []:
                         objects_map[obj["id"]] = obj
 
                 # --- 6. Fetch all maps ---
                 maps_map = {}
                 map_response = supabase.table("maps").select("*").execute()
-                for m in (map_response.data or []):
+                for m in map_response.data or []:
                     maps_map[m["id"]] = m
 
                 # --- 7. Helper: build location path (walk up parent chain) ---
@@ -423,10 +486,20 @@ def get_object_waypoints(ctx: Context, query: str, location: Optional[str] = Non
                     chain = []
                     visited = set()
                     current_id = loc_id
-                    while current_id and current_id in all_locations and current_id not in visited:
+                    while (
+                        current_id
+                        and current_id in all_locations
+                        and current_id not in visited
+                    ):
                         visited.add(current_id)
                         loc = all_locations[current_id]
-                        chain.append({"name": loc.get("name"), "type": loc.get("type"), "id": loc["id"]})
+                        chain.append(
+                            {
+                                "name": loc.get("name"),
+                                "type": loc.get("type"),
+                                "id": loc["id"],
+                            }
+                        )
                         current_id = loc.get("parent_id")
                     chain.reverse()  # root → leaf
                     return chain
@@ -444,18 +517,25 @@ def get_object_waypoints(ctx: Context, query: str, location: Optional[str] = Non
                             while queue:
                                 pid = queue.pop()
                                 for child_id, child in all_locations.items():
-                                    if child.get("parent_id") == pid and child_id not in matching_loc_ids:
+                                    if (
+                                        child.get("parent_id") == pid
+                                        and child_id not in matching_loc_ids
+                                    ):
                                         matching_loc_ids.add(child_id)
                                         queue.append(child_id)
 
-                    waypoints = [wp for wp in waypoints if wp.get("parent_id") in matching_loc_ids]
+                    waypoints = [
+                        wp
+                        for wp in waypoints
+                        if wp.get("parent_id") in matching_loc_ids
+                    ]
 
                     if not waypoints:
                         result = create_response(
                             type="navigation_query",
                             status="empty",
                             message=f"Tidak ditemukan '{query}' di lokasi '{location}'.",
-                            data=[]
+                            data=[],
                         )
                         span.update(output=result)
                         return result
@@ -474,46 +554,56 @@ def get_object_waypoints(ctx: Context, query: str, location: Optional[str] = Non
                         if map_id and map_id in maps_map:
                             map_name = maps_map[map_id].get("name")
 
-                    formatted_data.append({
-                        "waypoint_id": wp.get("id"),
-                        "display_name": wp.get("display_name"),
-                        "object": {
-                            "id": obj.get("id"),
-                            "name": obj.get("name"),
-                            "keywords": obj.get("keywords", []),
-                            "sop_url": obj.get("sop_url"),
-                        },
-                        "spatial_context": {
-                            "map": map_name,
-                            "location_path": " > ".join(
-                                [f"{l['name']} ({l['type']})" if l.get("type") else l["name"]
-                                 for l in location_path]
-                            ),
-                            "location_name": location_path[-1]["name"] if location_path else None,
-                        },
-                        "coordinates": {
-                            "nav_target": {
-                                "x": wp.get("view_x"),
-                                "y": wp.get("view_y"),
-                                "theta_deg": wp.get("view_yaw"),
+                    formatted_data.append(
+                        {
+                            "waypoint_id": wp.get("id"),
+                            "display_name": wp.get("display_name"),
+                            "object": {
+                                "id": obj.get("id"),
+                                "name": obj.get("name"),
+                                "keywords": obj.get("keywords", []),
+                                "sop_url": obj.get("sop_url"),
                             },
-                            "object_position": {
-                                "x": wp.get("obj_x"),
-                                "y": wp.get("obj_y"),
+                            "spatial_context": {
+                                "map": map_name,
+                                "location_path": " > ".join(
+                                    [
+                                        (
+                                            f"{l['name']} ({l['type']})"
+                                            if l.get("type")
+                                            else l["name"]
+                                        )
+                                        for l in location_path
+                                    ]
+                                ),
+                                "location_name": (
+                                    location_path[-1]["name"] if location_path else None
+                                ),
                             },
-                            "camera": {
-                                "pan": wp.get("camera_pan"),
-                                "tilt": wp.get("camera_tilt"),
-                                "zoom": wp.get("camera_zoom"),
+                            "coordinates": {
+                                "nav_target": {
+                                    "x": wp.get("view_x"),
+                                    "y": wp.get("view_y"),
+                                    "theta_deg": wp.get("view_yaw"),
+                                },
+                                "object_position": {
+                                    "x": wp.get("obj_x"),
+                                    "y": wp.get("obj_y"),
+                                },
+                                "camera": {
+                                    "pan": wp.get("camera_pan"),
+                                    "tilt": wp.get("camera_tilt"),
+                                    "zoom": wp.get("camera_zoom"),
+                                },
                             },
-                        },
-                    })
+                        }
+                    )
 
                 result = create_response(
                     type="navigation_query",
                     status="success",
                     message=f"Ditemukan {len(formatted_data)} waypoint yang cocok untuk '{query}'.",
-                    data=formatted_data
+                    data=formatted_data,
                 )
                 span.update(output=result)
                 return result
@@ -522,14 +612,16 @@ def get_object_waypoints(ctx: Context, query: str, location: Optional[str] = Non
                 result = create_response(
                     type="navigation_query",
                     status="error",
-                    message=f"Terjadi kesalahan saat query database: {str(e)}"
+                    message=f"Terjadi kesalahan saat query database: {str(e)}",
                 )
                 span.update(output=result)
                 return result
             except Exception as e:
                 raise e
 
+
 # --- TOOLS: FILE RETRIEVAL (SOP) ---
+
 
 @mcp.tool
 def get_sop_file(ctx: Context, query: str) -> dict:
@@ -545,25 +637,28 @@ def get_sop_file(ctx: Context, query: str) -> dict:
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
-    model_name = getattr(metadata, 'model_name', None)
-    t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    model_name = getattr(metadata, "model_name", None)
+    t_ctx = (
+        {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    )
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
         name="mcp-tool: get_sop_file",
         trace_context=t_ctx,
-        input={"query": query}
+        input={"query": query},
     ) as span:
         with propagate_attributes(tags=["mcp-server"]):
             try:
                 search_term = f"%{query}%"
 
                 # Search objects by name & keywords
-                obj_response = supabase.table("objects").select(
-                    "id, name, keywords, sop_url"
-                ).or_(
-                    f"name.ilike.{search_term},keywords.cs.{{{query}}}"
-                ).execute()
+                obj_response = (
+                    supabase.table("objects")
+                    .select("id, name, keywords, sop_url")
+                    .or_(f"name.ilike.{search_term},keywords.cs.{{{query}}}")
+                    .execute()
+                )
 
                 objects = obj_response.data or []
 
@@ -572,7 +667,7 @@ def get_sop_file(ctx: Context, query: str) -> dict:
                         type="sop_query",
                         status="empty",
                         message=f"Tidak ditemukan objek/SOP dengan kata kunci '{query}'.",
-                        data=[]
+                        data=[],
                     )
                     span.update(output=result)
                     return result
@@ -580,18 +675,20 @@ def get_sop_file(ctx: Context, query: str) -> dict:
                 # Format results
                 formatted = []
                 for obj in objects:
-                    formatted.append({
-                        "object_id": obj.get("id"),
-                        "name": obj.get("name"),
-                        "keywords": obj.get("keywords", []),
-                        "sop_url": obj.get("sop_url"),
-                    })
+                    formatted.append(
+                        {
+                            "object_id": obj.get("id"),
+                            "name": obj.get("name"),
+                            "keywords": obj.get("keywords", []),
+                            "sop_url": obj.get("sop_url"),
+                        }
+                    )
 
                 result = create_response(
                     type="sop_query",
                     status="success",
                     message=f"Ditemukan {len(formatted)} SOP yang cocok untuk '{query}'.",
-                    data=formatted
+                    data=formatted,
                 )
                 span.update(output=result)
                 return result
@@ -600,38 +697,46 @@ def get_sop_file(ctx: Context, query: str) -> dict:
                 result = create_response(
                     type="sop_query",
                     status="error",
-                    message=f"Terjadi kesalahan saat query database: {str(e)}"
+                    message=f"Terjadi kesalahan saat query database: {str(e)}",
                 )
                 span.update(output=result)
                 return result
 
+
 # --- TOOLS: CAMERA CAPTURE & UPLOAD ---
 
+
 @mcp.tool
-def capture_and_inspect_image(ctx: Context, inspected_object: Optional[str] = None, sop_context: Optional[str] = None) -> dict:
+def capture_and_inspect_image(
+    ctx: Context,
+    inspected_object: Optional[str] = None,
+    sop_context: Optional[str] = None,
+) -> dict:
     """
     Mengambil gambar dari kamera robot via go2rtc snapshot API.
-    Jika 'inspected_object' diberikan, gambar akan diproses oleh Gemini 
-    untuk mendeteksi objek tersebut. Jika ditemukan, gambar akan di-crop menggunakan OpenCV 
+    Jika 'inspected_object' diberikan, gambar akan diproses oleh Gemini
+    untuk mendeteksi objek tersebut. Jika ditemukan, gambar akan di-crop menggunakan OpenCV
     berdasarkan koordinat bounding box yang dikembalikan oleh model.
     Jika 'sop_context' juga diberikan, Gemini akan melakukan analisis visual terhadap
     objek berdasarkan prosedur SOP yang diberikan dan mengembalikan temuan inspeksinya.
     Berikan point penting dari sop dengan jelas, ringkas, dan tidak ada perubahan dengan sop aslinya.
-    Hasil gambar (asli atau hasil crop) akan diupload ke Supabase Storage bucket 
+    Hasil gambar (asli atau hasil crop) akan diupload ke Supabase Storage bucket
     'robotics-prata' folder 'captured', lalu dikembalikan public URL-nya beserta hasil analisis.
     """
     metadata = ctx.request_context.meta
     session_id = metadata.session_id
     trace_id = metadata.trace_id
     parent_span_id = metadata.observation_id
-    model_name = getattr(metadata, 'model_name', None)
-    t_ctx = {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    model_name = getattr(metadata, "model_name", None)
+    t_ctx = (
+        {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
+    )
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
         name="mcp-tool: capture_and_inspect_image",
         trace_context=t_ctx,
-        input={"inspected_object": inspected_object, "sop_context": sop_context}
+        input={"inspected_object": inspected_object, "sop_context": sop_context},
     ) as span:
         with propagate_attributes(tags=["mcp-server"]):
             try:
@@ -641,7 +746,7 @@ def capture_and_inspect_image(ctx: Context, inspected_object: Optional[str] = No
                     result = create_response(
                         type="image_capture",
                         status="error",
-                        message="Controller ROS Noetic belum siap. Pastikan roscore sudah berjalan."
+                        message="Controller ROS Noetic belum siap. Pastikan roscore sudah berjalan.",
                     )
                     span.update(output=result)
                     return result
@@ -653,7 +758,7 @@ def capture_and_inspect_image(ctx: Context, inspected_object: Optional[str] = No
                     result = create_response(
                         type="image_capture",
                         status="error",
-                        message="Gagal mengambil gambar dari go2rtc snapshot API (timeout atau stream tidak tersedia)."
+                        message="Gagal mengambil gambar dari go2rtc snapshot API (timeout atau stream tidak tersedia).",
                     )
                     span.update(output=result)
                     return result
@@ -689,10 +794,12 @@ def capture_and_inspect_image(ctx: Context, inspected_object: Optional[str] = No
                             schema = ObjectDetectionResult
 
                         response = client.models.generate_content(
-                            model='gemini-3.1-pro-preview',
+                            model=model_name,
                             contents=[
                                 prompt,
-                                types.Part.from_bytes(data=jpeg_bytes, mime_type='image/jpeg')
+                                types.Part.from_bytes(
+                                    data=jpeg_bytes, mime_type="image/jpeg"
+                                ),
                             ],
                             config=types.GenerateContentConfig(
                                 response_mime_type="application/json",
@@ -700,7 +807,7 @@ def capture_and_inspect_image(ctx: Context, inspected_object: Optional[str] = No
                                 temperature=0.0,
                             ),
                         )
-                        
+
                         result_gemini = response.parsed
 
                         # Simpan hasil analisis SOP jika ada
@@ -710,35 +817,35 @@ def capture_and_inspect_image(ctx: Context, inspected_object: Optional[str] = No
                                 "findings": result_gemini.findings,
                                 "inspection_status": result_gemini.status,
                             }
-                        
+
                         if result_gemini and result_gemini.is_detected:
                             # Convert bytes to numpy array
                             nparr = np.frombuffer(jpeg_bytes, np.uint8)
                             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                            
+
                             if img is not None:
                                 h, w = img.shape[:2]
-                                
+
                                 # Un-normalize coordinates dari range [0, 1000] ke pixel dimensi gambar asli
                                 ymin_px = int((result_gemini.ymin / 1000.0) * h)
                                 ymax_px = int((result_gemini.ymax / 1000.0) * h)
                                 xmin_px = int((result_gemini.xmin / 1000.0) * w)
                                 xmax_px = int((result_gemini.xmax / 1000.0) * w)
-                                
+
                                 # Tambahkan 10% padding agar objek tidak terpotong terlalu mepet
                                 pad_y = int((ymax_px - ymin_px) * 0.2)
                                 pad_x = int((xmax_px - xmin_px) * 0.2)
-                                
+
                                 # Clamp coordinates agar tidak melebihi batas gambar
                                 ymin = max(0, min(h - 1, ymin_px - pad_y))
                                 ymax = max(ymin + 1, min(h, ymax_px + pad_y))
                                 xmin = max(0, min(w - 1, xmin_px - pad_x))
                                 xmax = max(xmin + 1, min(w, xmax_px + pad_x))
-                                
+
                                 cropped_img = img[ymin:ymax, xmin:xmax]
-                                
+
                                 # Encode back to JPEG
-                                success, buffer = cv2.imencode('.jpg', cropped_img)
+                                success, buffer = cv2.imencode(".jpg", cropped_img)
                                 if success:
                                     jpeg_bytes = buffer.tobytes()
                     except Exception as e:
@@ -753,26 +860,29 @@ def capture_and_inspect_image(ctx: Context, inspected_object: Optional[str] = No
                 supabase.storage.from_(BUCKET_NAME).upload(
                     path=filepath,
                     file=jpeg_bytes,
-                    file_options={"content-type": "image/jpeg"}
+                    file_options={"content-type": "image/jpeg"},
                 )
 
                 # 4. Buat public URL
-                public_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{filepath}"
+                public_url = (
+                    f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{filepath}"
+                )
 
-                response_data = {
-                    "filepath": filepath,
-                    "public_url": public_url
-                }
+                response_data = {"filepath": filepath, "public_url": public_url}
                 if analysis_data:
                     response_data["inspection"] = analysis_data
 
-                msg = "Gambar berhasil diambil, diupload, dan dianalisis berdasarkan SOP." if analysis_data else "Gambar berhasil diambil dan diupload."
+                msg = (
+                    "Gambar berhasil diambil, diupload, dan dianalisis berdasarkan SOP."
+                    if analysis_data
+                    else "Gambar berhasil diambil dan diupload."
+                )
 
                 result = create_response(
                     type="image_capture",
                     status="success",
                     message=msg,
-                    data=response_data
+                    data=response_data,
                 )
                 span.update(output=result)
                 return result
@@ -781,7 +891,7 @@ def capture_and_inspect_image(ctx: Context, inspected_object: Optional[str] = No
                 result = create_response(
                     type="image_capture",
                     status="error",
-                    message=f"Gagal mengupload gambar ke Supabase: {str(e)}"
+                    message=f"Gagal mengupload gambar ke Supabase: {str(e)}",
                 )
                 span.update(output=result)
                 return result
