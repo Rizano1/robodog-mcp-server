@@ -68,6 +68,37 @@ def create_response(type: str, status: str, message: str, data: Any = None) -> d
         "data": data
     }
 
+def _search_objects_by_query(query: str) -> list:
+    """
+    Mencari objek berdasarkan nama (ilike) DAN keywords (partial match).
+    PostgREST `.cs.` hanya mendukung exact match pada array elements,
+    sehingga untuk partial/fuzzy keyword search, kita fetch semua objek
+    dan filter keywords secara manual di Python (case-insensitive substring).
+    """
+    search_term = f"%{query}%"
+    query_lower = query.lower()
+
+    # 1. Cari berdasarkan nama (ilike - partial match di DB)
+    name_response = supabase.table("objects").select("*").ilike(
+        "name", search_term
+    ).execute()
+    name_matched = {obj["id"]: obj for obj in (name_response.data or [])}
+
+    # 2. Fetch semua objek untuk keyword partial matching di Python
+    all_response = supabase.table("objects").select("*").execute()
+    for obj in (all_response.data or []):
+        if obj["id"] in name_matched:
+            continue  # sudah ditemukan via nama
+        keywords = obj.get("keywords") or []
+        for kw in keywords:
+            # Partial match: query adalah substring dari keyword, ATAU keyword adalah substring dari query
+            if query_lower in kw.lower() or kw.lower() in query_lower:
+                name_matched[obj["id"]] = obj
+                break
+
+    return list(name_matched.values())
+
+
 # --- TOOLS: ROBOT ACTION ---
 
 @mcp.tool
@@ -311,11 +342,9 @@ def get_object_waypoints(ctx: Context, query: str, location: Optional[str] = Non
             try:
                 search_term = f"%{query}%"
 
-                # --- 1. Search objects by name & keywords ---
-                obj_response = supabase.table("objects").select("*").or_(
-                    f"name.ilike.{search_term},keywords.cs.{{{query}}}"
-                ).execute()
-                matched_object_ids = [obj["id"] for obj in (obj_response.data or [])]
+                # --- 1. Search objects by name & keywords (partial match) ---
+                matched_objects = _search_objects_by_query(query)
+                matched_object_ids = [obj["id"] for obj in matched_objects]
 
                 # --- 2. Search waypoints by display_name OR matching object_id ---
                 if matched_object_ids:
@@ -512,16 +541,8 @@ def get_sop_file(ctx: Context, query: str) -> dict:
     ) as span:
         with propagate_attributes(tags=["mcp-server"]):
             try:
-                search_term = f"%{query}%"
-
-                # Search objects by name & keywords
-                obj_response = supabase.table("objects").select(
-                    "id, name, keywords, sop_url"
-                ).or_(
-                    f"name.ilike.{search_term},keywords.cs.{{{query}}}"
-                ).execute()
-
-                objects = obj_response.data or []
+                # Search objects by name & keywords (partial match)
+                objects = _search_objects_by_query(query)
 
                 if not objects:
                     result = create_response(
