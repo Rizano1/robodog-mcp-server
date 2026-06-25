@@ -898,6 +898,13 @@ def _inspect_with_gemini(
         )
         schema = ObjectDetectionResult
 
+    # Disable thinking untuk model 2.5 — known issue: thinking mode
+    # merusak akurasi bounding box secara signifikan pada Gemini 2.5 Flash
+    thinking_config = None
+    if "2.5" in model_name:
+        thinking_config = types.ThinkingConfig(thinking_budget=0)
+        print(f"   ⚙️ Thinking disabled for {model_name} (bbox accuracy fix)")
+
     response = client.models.generate_content(
         model=model_name,
         contents=[
@@ -908,6 +915,7 @@ def _inspect_with_gemini(
             response_mime_type="application/json",
             response_schema=schema,
             temperature=0.0,
+            thinking_config=thinking_config,
         ),
     )
 
