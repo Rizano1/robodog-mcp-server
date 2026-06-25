@@ -81,14 +81,14 @@ def _search_objects_by_query(query: str) -> list:
     query_lower = query.lower()
 
     # 1. Cari berdasarkan nama (ilike - partial match di DB)
-    name_response = (
-        supabase.table("objects").select("*").ilike("name", search_term).execute()
-    )
+    name_response = supabase.table("objects").select("*").ilike(
+        "name", search_term
+    ).execute()
     name_matched = {obj["id"]: obj for obj in (name_response.data or [])}
 
     # 2. Fetch semua objek untuk keyword partial matching di Python
     all_response = supabase.table("objects").select("*").execute()
-    for obj in all_response.data or []:
+    for obj in (all_response.data or []):
         if obj["id"] in name_matched:
             continue  # sudah ditemukan via nama
         keywords = obj.get("keywords") or []
@@ -99,6 +99,96 @@ def _search_objects_by_query(query: str) -> list:
                 break
 
     return list(name_matched.values())
+
+
+def _fetch_sop_text(object_name: str) -> Optional[str]:
+    """
+    Mencari objek berdasarkan nama, lalu download dan ekstrak isi SOP file-nya.
+    Mendukung format PDF, DOCX, dan plain text.
+    Mengembalikan teks SOP atau None jika tidak ditemukan.
+    """
+    import requests as req_lib
+    import mimetypes
+
+    try:
+        # 1. Cari objek berdasarkan nama
+        matched_objects = _search_objects_by_query(object_name)
+        if not matched_objects:
+            print(f"   ℹ️ SOP auto-fetch: No object found for '{object_name}'")
+            return None
+
+        # Ambil objek pertama yang punya sop_url
+        sop_url = None
+        matched_name = None
+        for obj in matched_objects:
+            if obj.get("sop_url"):
+                sop_url = obj["sop_url"]
+                matched_name = obj.get("name", object_name)
+                break
+
+        if not sop_url:
+            print(f"   ℹ️ SOP auto-fetch: Object '{object_name}' found but has no SOP URL")
+            return None
+
+        # 2. Download file dari URL
+        print(f"   📥 SOP auto-fetch: Downloading SOP for '{matched_name}' from {sop_url}")
+        resp = req_lib.get(sop_url, timeout=30)
+        resp.raise_for_status()
+        file_bytes = resp.content
+
+        if not file_bytes:
+            print(f"   ⚠️ SOP auto-fetch: File empty from URL: {sop_url}")
+            return None
+
+        # 3. Detect content type
+        content_type = resp.headers.get("Content-Type", "")
+        if ";" in content_type:
+            content_type = content_type.split(";")[0].strip()
+        if not content_type or content_type == "application/octet-stream":
+            mime_type, _ = mimetypes.guess_type(sop_url)
+            if mime_type:
+                content_type = mime_type
+
+        # 4. Extract text berdasarkan tipe file
+        if content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            # DOCX
+            import docx
+            doc_stream = io.BytesIO(file_bytes)
+            doc = docx.Document(doc_stream)
+            full_text = [para.text for para in doc.paragraphs]
+            extracted = "\n".join(full_text)
+            print(f"   ✅ SOP auto-fetch: Extracted DOCX text ({len(extracted)} chars)")
+            return extracted
+
+        elif content_type == "application/pdf":
+            # PDF
+            import pypdf
+            pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+            pages_text = []
+            for page in pdf_reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    pages_text.append(page_text)
+            extracted = "\n\n".join(pages_text) if pages_text else None
+            if extracted:
+                print(f"   ✅ SOP auto-fetch: Extracted PDF text ({len(extracted)} chars)")
+            else:
+                print(f"   ⚠️ SOP auto-fetch: No extractable text found in PDF")
+            return extracted
+
+        else:
+            # Plain text atau format lain, coba decode sebagai text
+            try:
+                extracted = file_bytes.decode("utf-8")
+                print(f"   ✅ SOP auto-fetch: Read as plain text ({len(extracted)} chars)")
+                return extracted
+            except UnicodeDecodeError:
+                print(f"   ⚠️ SOP auto-fetch: Cannot extract text from content type '{content_type}'")
+                return None
+
+    except Exception as e:
+        print(f"   ⚠️ SOP auto-fetch error: {e}")
+        return None
 
 
 # --- TOOLS: ROBOT ACTION ---
@@ -886,7 +976,7 @@ def _inspect_with_openai_compatible(
         "temperature": 0.0,
     }
 
-    resp = req_lib.post(url, json=payload, headers=headers, timeout=300)
+    resp = req_lib.post(url, json=payload, headers=headers, timeout=120)
     resp.raise_for_status()
     resp_json = resp.json()
 
@@ -1025,16 +1115,15 @@ def crop_detected_object(jpeg_bytes: bytes, detection: dict) -> bytes:
 def capture_and_inspect_image(
     ctx: Context,
     inspected_object: Optional[str] = None,
-    sop_context: Optional[str] = None,
 ) -> dict:
     """
     Mengambil gambar dari kamera robot via go2rtc snapshot API.
-    Jika 'inspected_object' diberikan, gambar akan diproses oleh Gemini
+    Jika 'inspected_object' diberikan, gambar akan diproses oleh AI model
     untuk mendeteksi objek tersebut. Jika ditemukan, gambar akan di-crop menggunakan OpenCV
     berdasarkan koordinat bounding box yang dikembalikan oleh model.
-    Jika 'sop_context' juga diberikan, Gemini akan melakukan analisis visual terhadap
-    objek berdasarkan prosedur SOP yang diberikan dan mengembalikan temuan inspeksinya.
-    Berikan point penting dari sop dengan jelas, ringkas, dan tidak ada perubahan dengan sop aslinya.
+    SOP (Standard Operating Procedure) akan otomatis dicari dan diambil dari database
+    berdasarkan nama objek. Jika SOP ditemukan, model akan melakukan analisis visual
+    terhadap objek berdasarkan prosedur SOP tersebut dan mengembalikan temuan inspeksinya.
     Hasil gambar (asli atau hasil crop) akan diupload ke Supabase Storage bucket
     'robotics-prata' folder 'captured', lalu dikembalikan public URL-nya beserta hasil analisis.
     """
@@ -1051,7 +1140,7 @@ def capture_and_inspect_image(
         as_type="span",
         name="mcp-tool: capture_and_inspect_image",
         trace_context=t_ctx,
-        input={"inspected_object": inspected_object, "sop_context": sop_context},
+        input={"inspected_object": inspected_object},
     ) as span:
         with propagate_attributes(tags=["mcp-server"]):
             try:
@@ -1081,6 +1170,13 @@ def capture_and_inspect_image(
                 # 1.5 Object Detection, Cropping & SOP Analysis (Opsional)
                 analysis_data = None
                 if inspected_object:
+                    # Auto-fetch SOP dari database berdasarkan nama objek
+                    sop_context = _fetch_sop_text(inspected_object)
+                    if sop_context:
+                        print(f"   📄 SOP found for '{inspected_object}', will include in inspection.")
+                    else:
+                        print(f"   ℹ️ No SOP found for '{inspected_object}', proceeding with detection only.")
+
                     try:
                         detection, analysis_data = inspect_image(
                             jpeg_bytes=jpeg_bytes,
