@@ -81,14 +81,14 @@ def _search_objects_by_query(query: str) -> list:
     query_lower = query.lower()
 
     # 1. Cari berdasarkan nama (ilike - partial match di DB)
-    name_response = supabase.table("objects").select("*").ilike(
-        "name", search_term
-    ).execute()
+    name_response = (
+        supabase.table("objects").select("*").ilike("name", search_term).execute()
+    )
     name_matched = {obj["id"]: obj for obj in (name_response.data or [])}
 
     # 2. Fetch semua objek untuk keyword partial matching di Python
     all_response = supabase.table("objects").select("*").execute()
-    for obj in (all_response.data or []):
+    for obj in all_response.data or []:
         if obj["id"] in name_matched:
             continue  # sudah ditemukan via nama
         keywords = obj.get("keywords") or []
@@ -107,8 +107,9 @@ def _fetch_sop_text(object_name: str) -> Optional[str]:
     Mendukung format PDF, DOCX, dan plain text.
     Mengembalikan teks SOP atau None jika tidak ditemukan.
     """
-    import requests as req_lib
     import mimetypes
+
+    import requests as req_lib
 
     try:
         # 1. Cari objek berdasarkan nama
@@ -127,11 +128,15 @@ def _fetch_sop_text(object_name: str) -> Optional[str]:
                 break
 
         if not sop_url:
-            print(f"   ℹ️ SOP auto-fetch: Object '{object_name}' found but has no SOP URL")
+            print(
+                f"   ℹ️ SOP auto-fetch: Object '{object_name}' found but has no SOP URL"
+            )
             return None
 
         # 2. Download file dari URL
-        print(f"   📥 SOP auto-fetch: Downloading SOP for '{matched_name}' from {sop_url}")
+        print(
+            f"   📥 SOP auto-fetch: Downloading SOP for '{matched_name}' from {sop_url}"
+        )
         resp = req_lib.get(sop_url, timeout=30)
         resp.raise_for_status()
         file_bytes = resp.content
@@ -150,9 +155,13 @@ def _fetch_sop_text(object_name: str) -> Optional[str]:
                 content_type = mime_type
 
         # 4. Extract text berdasarkan tipe file
-        if content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        if (
+            content_type
+            == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ):
             # DOCX
             import docx
+
             doc_stream = io.BytesIO(file_bytes)
             doc = docx.Document(doc_stream)
             full_text = [para.text for para in doc.paragraphs]
@@ -163,6 +172,7 @@ def _fetch_sop_text(object_name: str) -> Optional[str]:
         elif content_type == "application/pdf":
             # PDF
             import pypdf
+
             pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
             pages_text = []
             for page in pdf_reader.pages:
@@ -171,7 +181,9 @@ def _fetch_sop_text(object_name: str) -> Optional[str]:
                     pages_text.append(page_text)
             extracted = "\n\n".join(pages_text) if pages_text else None
             if extracted:
-                print(f"   ✅ SOP auto-fetch: Extracted PDF text ({len(extracted)} chars)")
+                print(
+                    f"   ✅ SOP auto-fetch: Extracted PDF text ({len(extracted)} chars)"
+                )
             else:
                 print(f"   ⚠️ SOP auto-fetch: No extractable text found in PDF")
             return extracted
@@ -180,10 +192,14 @@ def _fetch_sop_text(object_name: str) -> Optional[str]:
             # Plain text atau format lain, coba decode sebagai text
             try:
                 extracted = file_bytes.decode("utf-8")
-                print(f"   ✅ SOP auto-fetch: Read as plain text ({len(extracted)} chars)")
+                print(
+                    f"   ✅ SOP auto-fetch: Read as plain text ({len(extracted)} chars)"
+                )
                 return extracted
             except UnicodeDecodeError:
-                print(f"   ⚠️ SOP auto-fetch: Cannot extract text from content type '{content_type}'")
+                print(
+                    f"   ⚠️ SOP auto-fetch: Cannot extract text from content type '{content_type}'"
+                )
                 return None
 
     except Exception as e:
@@ -976,7 +992,7 @@ def _inspect_with_openai_compatible(
         "temperature": 0.0,
     }
 
-    resp = req_lib.post(url, json=payload, headers=headers, timeout=120)
+    resp = req_lib.post(url, json=payload, headers=headers, timeout=300)
     resp.raise_for_status()
     resp_json = resp.json()
 
@@ -1173,9 +1189,13 @@ def capture_and_inspect_image(
                     # Auto-fetch SOP dari database berdasarkan nama objek
                     sop_context = _fetch_sop_text(inspected_object)
                     if sop_context:
-                        print(f"   📄 SOP found for '{inspected_object}', will include in inspection.")
+                        print(
+                            f"   📄 SOP found for '{inspected_object}', will include in inspection."
+                        )
                     else:
-                        print(f"   ℹ️ No SOP found for '{inspected_object}', proceeding with detection only.")
+                        print(
+                            f"   ℹ️ No SOP found for '{inspected_object}', proceeding with detection only."
+                        )
 
                     try:
                         detection, analysis_data = inspect_image(
