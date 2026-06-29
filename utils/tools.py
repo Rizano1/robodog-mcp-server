@@ -752,80 +752,6 @@ def get_object_waypoints(
                 raise e
 
 
-# --- TOOLS: FILE RETRIEVAL (SOP) ---
-
-
-@mcp.tool
-def get_sop_file(ctx: Context, query: str) -> dict:
-    """
-    Mencari dan mengambil file SOP berdasarkan nama objek atau keywords dari database.
-    Tool ini mencari di tabel 'objects' dan mengembalikan sop_url yang terkait.
-
-    Args:
-        query: Kata kunci pencarian (nama objek atau keyword).
-               Contoh: "pressure tank", "valve", "pompa".
-    """
-    metadata = ctx.request_context.meta
-    session_id = metadata.session_id
-    trace_id = metadata.trace_id
-    parent_span_id = metadata.observation_id
-    model_name = getattr(metadata, "model_name", None)
-    t_ctx = (
-        {"trace_id": trace_id, "parent_span_id": parent_span_id} if trace_id else None
-    )
-
-    with langfuse_client.start_as_current_observation(
-        as_type="span",
-        name="mcp-tool: get_sop_file",
-        trace_context=t_ctx,
-        input={"query": query},
-    ) as span:
-        with propagate_attributes(tags=["mcp-server"]):
-            try:
-                # Search objects by name & keywords (partial match)
-                objects = _search_objects_by_query(query)
-
-                if not objects:
-                    result = create_response(
-                        type="sop_query",
-                        status="empty",
-                        message=f"Tidak ditemukan objek/SOP dengan kata kunci '{query}'.",
-                        data=[],
-                    )
-                    span.update(output=result)
-                    return result
-
-                # Format results
-                formatted = []
-                for obj in objects:
-                    formatted.append(
-                        {
-                            "object_id": obj.get("id"),
-                            "name": obj.get("name"),
-                            "keywords": obj.get("keywords", []),
-                            "sop_url": obj.get("sop_url"),
-                        }
-                    )
-
-                result = create_response(
-                    type="sop_query",
-                    status="success",
-                    message=f"Ditemukan {len(formatted)} SOP yang cocok untuk '{query}'.",
-                    data=formatted,
-                )
-                span.update(output=result)
-                return result
-
-            except Exception as e:
-                result = create_response(
-                    type="sop_query",
-                    status="error",
-                    message=f"Terjadi kesalahan saat query database: {str(e)}",
-                )
-                span.update(output=result)
-                return result
-
-
 # --- VISION INSPECTION HELPERS ---
 
 
@@ -1136,27 +1062,13 @@ def crop_detected_object(jpeg_bytes: bytes, detection: dict) -> bytes:
 
 
 @mcp.tool
-def capture_and_inspect_image(
+def capture_image(
     ctx: Context,
-    inspected_object: Optional[str] = None,
-    notes: Optional[str] = None,
 ) -> dict:
     """
     Mengambil gambar dari kamera robot via go2rtc snapshot API.
-    Jika 'inspected_object' diberikan, gambar akan diproses oleh AI model
-    untuk mendeteksi objek tersebut. Jika ditemukan, gambar akan di-crop menggunakan OpenCV
-    berdasarkan koordinat bounding box yang dikembalikan oleh model.
-    SOP (Standard Operating Procedure) akan otomatis dicari dan diambil dari database
-    berdasarkan nama objek. Jika SOP ditemukan, model akan melakukan analisis visual
-    terhadap objek berdasarkan prosedur SOP tersebut dan mengembalikan temuan inspeksinya.
-    Hasil gambar (asli atau hasil crop) akan diupload ke Supabase Storage bucket
-    'robotics-prata' folder 'captured', lalu dikembalikan public URL-nya beserta hasil analisis.
-
-    Args:
-        inspected_object: Nama objek yang ingin dideteksi dan diinspeksi.
-        notes: (Opsional) Catatan atau instruksi tambahan dari user untuk inspeksi.
-               Contoh: "lakukan pengecekan SOP level 2", "fokus pada korosi",
-               "tambahan SOP: periksa tekanan gauge harus di range 2-4 bar".
+    Hasil gambar akan diupload ke Supabase Storage bucket
+    'robotics-prata' folder 'captured', lalu dikembalikan public URL-nya.
     """
     metadata = ctx.request_context.meta
     session_id = metadata.session_id
@@ -1169,9 +1081,9 @@ def capture_and_inspect_image(
 
     with langfuse_client.start_as_current_observation(
         as_type="span",
-        name="mcp-tool: capture_and_inspect_image",
+        name="mcp-tool: capture_image",
         trace_context=t_ctx,
-        input={"inspected_object": inspected_object, "notes": notes},
+        input={},
     ) as span:
         with propagate_attributes(tags=["mcp-server"]):
             try:
@@ -1198,45 +1110,6 @@ def capture_and_inspect_image(
                     span.update(output=result)
                     return result
 
-                # 1.5 Object Detection, Cropping & SOP Analysis (Opsional)
-                analysis_data = None
-                if inspected_object:
-                    # Auto-fetch SOP dari database berdasarkan nama objek
-                    sop_context = _fetch_sop_text(inspected_object)
-                    if sop_context:
-                        print(
-                            f"   📄 SOP found for '{inspected_object}', will include in inspection."
-                        )
-                    else:
-                        print(
-                            f"   ℹ️ No SOP found for '{inspected_object}', proceeding with detection only."
-                        )
-
-                    # Append notes ke sop_context jika ada
-                    if notes:
-                        print(f"   📝 Notes from LLM: {notes}")
-                        notes_section = f"\n--- ADDITIONAL NOTES ---\n{notes}\n--- END NOTES ---"
-                        if sop_context:
-                            sop_context = sop_context + notes_section
-                        else:
-                            # Jika tidak ada SOP tapi ada notes, gunakan notes sebagai sop_context
-                            # agar tetap masuk ke inspection prompt
-                            sop_context = notes_section
-
-                    try:
-                        detection, analysis_data = inspect_image(
-                            jpeg_bytes=jpeg_bytes,
-                            inspected_object=inspected_object,
-                            sop_context=sop_context,
-                            model_name=model_name,
-                        )
-
-                        if detection and detection.get("is_detected"):
-                            jpeg_bytes = crop_detected_object(jpeg_bytes, detection)
-                    except Exception as e:
-                        print(f"Error during detection/inspection: {e}")
-                        # Lanjutkan dengan gambar original jika terjadi error
-
                 # 2. Generate nama file dengan timestamp
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filepath = f"captured/capture_{timestamp}_{session_id}.jpg"
@@ -1254,14 +1127,7 @@ def capture_and_inspect_image(
                 )
 
                 response_data = {"filepath": filepath, "public_url": public_url}
-                if analysis_data:
-                    response_data["inspection"] = analysis_data
-
-                msg = (
-                    "Gambar berhasil diambil, diupload, dan dianalisis berdasarkan SOP."
-                    if analysis_data
-                    else "Gambar berhasil diambil dan diupload."
-                )
+                msg = "Gambar berhasil diambil dan diupload."
 
                 result = create_response(
                     type="image_capture",
