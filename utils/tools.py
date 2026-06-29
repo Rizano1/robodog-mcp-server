@@ -1062,7 +1062,7 @@ def crop_detected_object(jpeg_bytes: bytes, detection: dict) -> bytes:
 
 
 @mcp.tool
-def capture_image(
+def capture_and_inspect_image(
     ctx: Context,
 ) -> dict:
     """
