@@ -1060,6 +1060,7 @@ def inspect_image(
         (detection_result, analysis_data) — detection_result dict dengan is_detected + bbox,
         analysis_data dict dengan SOP findings atau None.
     """
+    model_name = "gemini-3.1-pro-preview"
     # Default ke Gemini jika tidak ada model_name
     if not model_name or model_name.startswith("gemini"):
         # Untuk Gemini, gunakan model vision terbaik yang tersedia
@@ -1215,7 +1216,9 @@ def capture_and_inspect_image(
                     # Append notes ke sop_context jika ada
                     if notes:
                         print(f"   📝 Notes from LLM: {notes}")
-                        notes_section = f"\n--- ADDITIONAL NOTES ---\n{notes}\n--- END NOTES ---"
+                        notes_section = (
+                            f"\n--- ADDITIONAL NOTES ---\n{notes}\n--- END NOTES ---"
+                        )
                         if sop_context:
                             sop_context = sop_context + notes_section
                         else:
