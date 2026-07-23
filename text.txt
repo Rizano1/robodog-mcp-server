@@ -1,0 +1,11 @@
+
+
+3. tinggi itu agak abstrak
+
+1. cantumkan latensi di kesimpulan perbandingan qwen
+
+1. tambahan batasan masalah
+
+1. permasalahan qwen dihapus, tujuannya juga
+
+1. kesimpulan qwen dijadikan satu dengan kesimpulan ke satu
